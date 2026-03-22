@@ -2,6 +2,5 @@ streamlit>=1.32.0
 numpy
 matplotlib
 scipy
-pymatgen
 plotly
-streamlit-plotly-events>=0.3.0
+pymatgen

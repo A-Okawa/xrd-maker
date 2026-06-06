@@ -19,14 +19,14 @@ try:
 except ImportError:
     PYMATGEN_AVAILABLE = False
 
-st.set_page_config(page_title="XRD Analyzer", page_icon="🔬", layout="wide")
+st.set_page_config(page_title="XRD Maker", page_icon="🔬", layout="wide")
 
 # ===== パスワード認証 =====
 def check_password():
     if st.session_state.get("authenticated"):
         return True
     pwd = st.secrets.get("password", "")
-    st.title("🔬 XRD Analyzer")
+    st.title("🔬 XRD Maker")
     entered = st.text_input("パスワードを入力してください", type="password")
     if st.button("ログイン"):
         if entered == pwd:
@@ -39,7 +39,7 @@ def check_password():
 if not check_password():
     st.stop()
 
-st.title("XRD Analyzer")
+st.title("XRD Maker")
 st.caption("複数パターン重ね合わせ・CIFリファレンス・論文用TIFF出力")
 
 # ===== 色ファミリー =====

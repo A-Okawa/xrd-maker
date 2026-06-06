@@ -5,7 +5,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
-from scipy.signal import savgol_filter, find_peaks
+from scipy.signal import find_peaks
 from collections import OrderedDict
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -20,6 +20,25 @@ except ImportError:
     PYMATGEN_AVAILABLE = False
 
 st.set_page_config(page_title="XRD Analyzer", page_icon="🔬", layout="wide")
+
+# ===== パスワード認証 =====
+def check_password():
+    if st.session_state.get("authenticated"):
+        return True
+    pwd = st.secrets.get("password", "")
+    st.title("🔬 XRD Analyzer")
+    entered = st.text_input("パスワードを入力してください", type="password")
+    if st.button("ログイン"):
+        if entered == pwd:
+            st.session_state["authenticated"] = True
+            st.rerun()
+        else:
+            st.error("パスワードが違います")
+    return False
+
+if not check_password():
+    st.stop()
+
 st.title("XRD Analyzer")
 st.caption("複数パターン重ね合わせ・CIFリファレンス・論文用TIFF出力")
 
@@ -159,12 +178,6 @@ def calc_cif_pattern(cif_bytes: bytes, two_theta_range=(5, 90)):
         os.unlink(tmp_path)
 
 
-def apply_smooth(y, window):
-    if window is None or len(y) < window:
-        return y
-    return savgol_filter(y, window_length=window, polyorder=3)
-
-
 def detect_peaks(x, y, prominence=0.1, min_dist_deg=0.5):
     if len(y) == 0:
         return np.array([])
@@ -221,8 +234,6 @@ cif_files = st.sidebar.file_uploader(
 
 st.sidebar.header("⚙️ グラフ設定")
 x_min, x_max   = st.sidebar.slider("2θ 範囲 (°)", 5.0, 90.0, (10.0, 80.0), step=0.5)
-do_smooth      = st.sidebar.checkbox("スムージングを適用", value=True)
-smoothing      = st.sidebar.slider("窓幅（奇数）", 3, 51, 11, step=2) if do_smooth else None
 normalize      = st.sidebar.checkbox("強度を正規化（最大=1）", value=True)
 show_legend    = st.sidebar.checkbox("メイン凡例を表示", value=True)
 show_cif_legend= st.sidebar.checkbox("ICDD ラベルをグラフ内に表示", value=True)
@@ -433,7 +444,7 @@ if xrd_files:
                 x, y = x[mask], y[mask]
                 if len(y) == 0:
                     continue
-                y = apply_smooth(y, smoothing)
+
                 y_max = max(np.max(y), 1e-9)
 
                 if normalize:
@@ -568,7 +579,6 @@ if xrd_files:
             x, y = x[mask], y[mask]
             if len(y) == 0:
                 continue
-            y = apply_smooth(y, smoothing)
             y_max = max(np.max(y), 1e-9)
 
             if normalize:

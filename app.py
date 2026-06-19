@@ -29,7 +29,243 @@ try:
 except ImportError:
     PDFPLUMBER_AVAILABLE = False
 
+# ===== 翻訳辞書 / Translation dictionary =====
+TRANSLATIONS = {
+    "ja": {
+        "password_prompt": "パスワードを入力してください",
+        "login": "ログイン",
+        "wrong_password": "パスワードが違います",
+        "app_caption": "複数パターン重ね合わせ・CIF/PDFカード リファレンス・論文用TIFF出力",
+        "color_red": "赤系",
+        "color_orange": "橙・黄系",
+        "color_green": "緑系",
+        "color_blue": "青系",
+        "color_purple": "紫・ピンク系",
+        "color_brown": "茶・ベージュ系",
+        "color_gray": "黒・グレー系",
+        "label": "ラベル",
+        "add_italic": "＋italic",
+        "italic_help": r"末尾に $\it{TEXT}$ を追加。TEXTを書き換えて使用",
+        "add_subscript": "＋下付き",
+        "subscript_help": r"末尾に $_{N}$ を追加。Nを書き換えて使用",
+        "add_superscript": "＋上付き",
+        "superscript_help": r"末尾に $^{N}$ を追加。Nを書き換えて使用",
+        "change_color": "🎨 色を変更",
+        "session_header": "💾 セッション",
+        "load_session": "セッションを読み込む (.json)",
+        "xrd_data_header": "📂 XRDデータ",
+        "xrd_upload": "XRDデータ (.xy / .txt / .csv)",
+        "ref_header": "📂 リファレンス",
+        "cif_upload": "CIFファイル (.cif)",
+        "pdf_upload": "PDFカード (.pdf)",
+        "restored_xrd": "復元済み XRD: ",
+        "restored_cif": "復元済み CIF: ",
+        "restored_pdf": "復元済み PDF: ",
+        "graph_settings": "⚙️ グラフ設定",
+        "xrange": "2θ 範囲 (°)",
+        "normalize_cb": "強度を正規化（最大=1）",
+        "show_legend_cb": "メイン凡例を表示",
+        "show_cif_legend_cb": "ICDD ラベルをグラフ内に表示",
+        "show_peaks_cb": "ピーク位置を表示",
+        "peak_sensitivity": "ピーク感度",
+        "offset_multiplier": "オフセット（倍率）",
+        "tick_settings": "目盛り設定",
+        "major_tick": "主目盛り間隔 (°)",
+        "show_minor_cb": "副目盛りを表示",
+        "minor_tick": "副目盛り間隔 (°)",
+        "icdd_label_settings": "ICDD ラベル設定",
+        "icdd_label_pos": "ICDDラベル位置",
+        "left": "左",
+        "right": "右",
+        "icdd_label_fontsize": "ICDDラベル文字サイズ",
+        "icdd_offset_x": "ICDD横オフセット (°)",
+        "icdd_offset_x_help": "端からの距離（°）",
+        "icdd_offset_y": "ICDD縦オフセット（行高さ比）",
+        "icdd_offset_y_help": "0=行の下端、1.0=行の上端",
+        "sample_labels": "サンプルラベル（グラフ内）",
+        "show_side_labels_cb": "グラフ内にラベルを表示",
+        "label_pos": "ラベル位置",
+        "label_fontsize": "ラベル文字サイズ",
+        "label_offset_x": "横オフセット（°）",
+        "label_offset_x_help": "正=グラフ内側、負=グラフ外側",
+        "label_offset_y": "縦オフセット（パターン高さ比）",
+        "label_offset_y_help": "0=ベースライン、1.0=ピーク付近",
+        "fig_size": "📐 図サイズ・出力",
+        "fig_width": "図の幅 (inch)",
+        "fig_height": "図の高さ (inch)",
+        "font_size": "フォントサイズ",
+        "save_session": "💾 セッションを保存 (.json)",
+        "show_panel": "⚙️ パターン設定パネルを表示",
+        "xrd_patterns": "#### XRD パターン",
+        "display_order": "表示順",
+        "show_cb": "表示する",
+        "offset_adj": "オフセット調整",
+        "y_position": "Y位置（絶対値）",
+        "reference_header": "#### リファレンス",
+        "pdf_card_md": "**PDFカード**",
+        "drag_zoom": "ドラッグで範囲ズーム ／ ダブルクリックでリセット",
+        "save_tiff": "📥 TIFF として保存 ({dpi} DPI)",
+        "save_png": "📥 PNG として保存（確認用）",
+        "upload_prompt": "サイドバーから XRD データファイル（.xy / .txt / .csv）をアップロードしてください。",
+        "no_pymatgen": "pymatgen が未インストールのため CIF リファレンス機能は無効です。",
+        "no_pdfplumber": "pdfplumber が未インストールのため PDFカード リファレンス機能は無効です。",
+        "cif_error": "CIF エラー: ",
+        "pdf_error": "PDFカード解析エラー: ",
+    },
+    "en": {
+        "password_prompt": "Enter password",
+        "login": "Login",
+        "wrong_password": "Incorrect password",
+        "app_caption": "Multi-pattern overlay · CIF/PDF card reference · Publication-quality TIFF export",
+        "color_red": "Reds",
+        "color_orange": "Orange/Yellow",
+        "color_green": "Greens",
+        "color_blue": "Blues",
+        "color_purple": "Purple/Pink",
+        "color_brown": "Brown/Beige",
+        "color_gray": "Black/Gray",
+        "label": "Label",
+        "add_italic": "+italic",
+        "italic_help": r"Appends $\it{TEXT}$ at the end. Replace TEXT.",
+        "add_subscript": "+Subscript",
+        "subscript_help": r"Appends $_{N}$ at the end. Replace N.",
+        "add_superscript": "+Superscript",
+        "superscript_help": r"Appends $^{N}$ at the end. Replace N.",
+        "change_color": "🎨 Change color",
+        "session_header": "💾 Session",
+        "load_session": "Load session (.json)",
+        "xrd_data_header": "📂 XRD Data",
+        "xrd_upload": "XRD Data (.xy / .txt / .csv)",
+        "ref_header": "📂 Reference",
+        "cif_upload": "CIF File (.cif)",
+        "pdf_upload": "PDF Card (.pdf)",
+        "restored_xrd": "Restored XRD: ",
+        "restored_cif": "Restored CIF: ",
+        "restored_pdf": "Restored PDF: ",
+        "graph_settings": "⚙️ Graph Settings",
+        "xrange": "2θ Range (°)",
+        "normalize_cb": "Normalize intensity (max=1)",
+        "show_legend_cb": "Show main legend",
+        "show_cif_legend_cb": "Show ICDD labels in plot",
+        "show_peaks_cb": "Show peak positions",
+        "peak_sensitivity": "Peak sensitivity",
+        "offset_multiplier": "Offset (multiplier)",
+        "tick_settings": "Tick settings",
+        "major_tick": "Major tick interval (°)",
+        "show_minor_cb": "Show minor ticks",
+        "minor_tick": "Minor tick interval (°)",
+        "icdd_label_settings": "ICDD label settings",
+        "icdd_label_pos": "ICDD label position",
+        "left": "Left",
+        "right": "Right",
+        "icdd_label_fontsize": "ICDD label font size",
+        "icdd_offset_x": "ICDD horizontal offset (°)",
+        "icdd_offset_x_help": "Distance from edge (°)",
+        "icdd_offset_y": "ICDD vertical offset (row height ratio)",
+        "icdd_offset_y_help": "0=bottom of row, 1.0=top of row",
+        "sample_labels": "Sample labels (in plot)",
+        "show_side_labels_cb": "Show labels in plot",
+        "label_pos": "Label position",
+        "label_fontsize": "Label font size",
+        "label_offset_x": "Horizontal offset (°)",
+        "label_offset_x_help": "Positive=inside, Negative=outside",
+        "label_offset_y": "Vertical offset (pattern height ratio)",
+        "label_offset_y_help": "0=baseline, 1.0=near peak",
+        "fig_size": "📐 Figure Size & Export",
+        "fig_width": "Figure width (inch)",
+        "fig_height": "Figure height (inch)",
+        "font_size": "Font size",
+        "save_session": "💾 Save session (.json)",
+        "show_panel": "⚙️ Show pattern settings panel",
+        "xrd_patterns": "#### XRD Patterns",
+        "display_order": "Display order",
+        "show_cb": "Show",
+        "offset_adj": "Offset adjustment",
+        "y_position": "Y position (absolute)",
+        "reference_header": "#### Reference",
+        "pdf_card_md": "**PDF Card**",
+        "drag_zoom": "Drag to zoom / Double-click to reset",
+        "save_tiff": "📥 Save as TIFF ({dpi} DPI)",
+        "save_png": "📥 Save as PNG (for preview)",
+        "upload_prompt": "Upload XRD data files (.xy / .txt / .csv) from the sidebar.",
+        "no_pymatgen": "CIF reference is disabled (pymatgen not installed).",
+        "no_pdfplumber": "PDF card reference is disabled (pdfplumber not installed).",
+        "cif_error": "CIF error: ",
+        "pdf_error": "PDF card parse error: ",
+    },
+}
+
+# ===== 色データ（言語非依存） =====
+_COLOR_FAMILIES_DATA = OrderedDict([
+    ("red", [
+        ("#7b0000", "Deep Maroon"), ("#b71c1c", "Dark Red"),
+        ("#d32f2f", "Red"),         ("#e53935", "Bright Red"),
+        ("#ef9a9a", "Light Red"),   ("#f48fb1", "Light Pink"),
+        ("#f8bbd0", "Pale Pink"),
+    ]),
+    ("orange", [
+        ("#bf360c", "Deep Orange"), ("#e64a19", "Dark Orange"),
+        ("#ff7043", "Orange"),      ("#ffa726", "Amber"),
+        ("#ffca28", "Yellow"),      ("#fff176", "Light Yellow"),
+    ]),
+    ("green", [
+        ("#1b5e20", "Deep Green"),  ("#2e7d32", "Dark Green"),
+        ("#43a047", "Green"),       ("#66bb6a", "Medium Green"),
+        ("#00897b", "Teal"),        ("#26c6da", "Cyan"),
+        ("#b2dfdb", "Pale Teal"),
+    ]),
+    ("blue", [
+        ("#0d47a1", "Deep Blue"),   ("#1565c0", "Dark Blue"),
+        ("#1976d2", "Blue"),        ("#1e88e5", "Medium Blue"),
+        ("#42a5f5", "Sky Blue"),    ("#90caf9", "Light Blue"),
+        ("#bbdefb", "Pale Blue"),
+    ]),
+    ("purple", [
+        ("#4a148c", "Deep Purple"), ("#6a1b9a", "Dark Purple"),
+        ("#8e24aa", "Purple"),      ("#ab47bc", "Medium Purple"),
+        ("#ba68c8", "Violet"),      ("#ce93d8", "Lavender"),
+        ("#f06292", "Pink"),
+    ]),
+    ("brown", [
+        ("#3e2723", "Deep Brown"),  ("#5d4037", "Brown"),
+        ("#8d6e63", "Medium Brown"),("#a1887f", "Warm Beige"),
+        ("#d7ccc8", "Light Beige"),
+    ]),
+    ("gray", [
+        ("#000000", "Black"),       ("#212121", "Near Black"),
+        ("#424242", "Very Dark Gray"),("#616161", "Dark Gray"),
+        ("#9e9e9e", "Medium Gray"), ("#bdbdbd", "Gray"),
+        ("#e0e0e0", "Light Gray"),
+    ]),
+])
+
+_COLOR_FAMILY_NAME_KEYS = {
+    "red": "color_red",
+    "orange": "color_orange",
+    "green": "color_green",
+    "blue": "color_blue",
+    "purple": "color_purple",
+    "brown": "color_brown",
+    "gray": "color_gray",
+}
+
+ALL_COLORS = [h for fam in _COLOR_FAMILIES_DATA.values() for h, _ in fam]
+
 st.set_page_config(page_title="XRD Maker", page_icon="🔬", layout="wide")
+
+# ===== 言語選択 / Language selection =====
+_lang_option = st.sidebar.radio(
+    "🌐 Language / 言語", ["日本語", "English"],
+    horizontal=True, key="lang_radio",
+)
+_lang_code = "en" if _lang_option == "English" else "ja"
+T = TRANSLATIONS[_lang_code]
+
+# 言語付き色ファミリー名
+COLOR_FAMILIES = OrderedDict(
+    (T[_COLOR_FAMILY_NAME_KEYS[k]], v)
+    for k, v in _COLOR_FAMILIES_DATA.items()
+)
 
 # ===== パスワード認証 =====
 def check_password():
@@ -37,65 +273,20 @@ def check_password():
         return True
     pwd = st.secrets.get("password", "")
     st.title("🔬 XRD Maker")
-    entered = st.text_input("パスワードを入力してください", type="password")
-    if st.button("ログイン"):
+    entered = st.text_input(T["password_prompt"], type="password")
+    if st.button(T["login"]):
         if entered == pwd:
             st.session_state["authenticated"] = True
             st.rerun()
         else:
-            st.error("パスワードが違います")
+            st.error(T["wrong_password"])
     return False
 
 if not check_password():
     st.stop()
 
 st.title("XRD Maker")
-st.caption("複数パターン重ね合わせ・CIF/PDFカード リファレンス・論文用TIFF出力")
-
-# ===== 色ファミリー =====
-COLOR_FAMILIES = OrderedDict([
-    ("赤系", [
-        ("#7b0000", "Deep Maroon"), ("#b71c1c", "Dark Red"),
-        ("#d32f2f", "Red"),         ("#e53935", "Bright Red"),
-        ("#ef9a9a", "Light Red"),   ("#f48fb1", "Light Pink"),
-        ("#f8bbd0", "Pale Pink"),
-    ]),
-    ("橙・黄系", [
-        ("#bf360c", "Deep Orange"), ("#e64a19", "Dark Orange"),
-        ("#ff7043", "Orange"),      ("#ffa726", "Amber"),
-        ("#ffca28", "Yellow"),      ("#fff176", "Light Yellow"),
-    ]),
-    ("緑系", [
-        ("#1b5e20", "Deep Green"),  ("#2e7d32", "Dark Green"),
-        ("#43a047", "Green"),       ("#66bb6a", "Medium Green"),
-        ("#00897b", "Teal"),        ("#26c6da", "Cyan"),
-        ("#b2dfdb", "Pale Teal"),
-    ]),
-    ("青系", [
-        ("#0d47a1", "Deep Blue"),   ("#1565c0", "Dark Blue"),
-        ("#1976d2", "Blue"),        ("#1e88e5", "Medium Blue"),
-        ("#42a5f5", "Sky Blue"),    ("#90caf9", "Light Blue"),
-        ("#bbdefb", "Pale Blue"),
-    ]),
-    ("紫・ピンク系", [
-        ("#4a148c", "Deep Purple"), ("#6a1b9a", "Dark Purple"),
-        ("#8e24aa", "Purple"),      ("#ab47bc", "Medium Purple"),
-        ("#ba68c8", "Violet"),      ("#ce93d8", "Lavender"),
-        ("#f06292", "Pink"),
-    ]),
-    ("茶・ベージュ系", [
-        ("#3e2723", "Deep Brown"),  ("#5d4037", "Brown"),
-        ("#8d6e63", "Medium Brown"),("#a1887f", "Warm Beige"),
-        ("#d7ccc8", "Light Beige"),
-    ]),
-    ("黒・グレー系", [
-        ("#000000", "Black"),       ("#212121", "Near Black"),
-        ("#424242", "Very Dark Gray"),("#616161", "Dark Gray"),
-        ("#9e9e9e", "Medium Gray"), ("#bdbdbd", "Gray"),
-        ("#e0e0e0", "Light Gray"),
-    ]),
-])
-ALL_COLORS = [h for fam in COLOR_FAMILIES.values() for h, _ in fam]
+st.caption(T["app_caption"])
 
 
 # ===== RestoredFile =====
@@ -123,22 +314,22 @@ def label_input(key: str, default: str = "") -> str:
         st.session_state[ver_key] = 0
 
     inp_key = f"_inp_{key}_v{st.session_state[ver_key]}"
-    inp = st.text_input("ラベル", value=st.session_state[val_key], key=inp_key)
+    inp = st.text_input(T["label"], value=st.session_state[val_key], key=inp_key)
     st.session_state[val_key] = inp
 
     c1, c2, c3 = st.columns(3)
-    if c1.button("＋italic", key=f"_bi_{key}", use_container_width=True,
-                 help="末尾に $\\it{TEXT}$ を追加。TEXTを書き換えて使用"):
+    if c1.button(T["add_italic"], key=f"_bi_{key}", use_container_width=True,
+                 help=T["italic_help"]):
         st.session_state[val_key] = inp + r"$\it{TEXT}$"
         st.session_state[ver_key] += 1
         st.rerun()
-    if c2.button("＋下付き", key=f"_bs_{key}", use_container_width=True,
-                 help="末尾に $_{N}$ を追加。Nを書き換えて使用"):
+    if c2.button(T["add_subscript"], key=f"_bs_{key}", use_container_width=True,
+                 help=T["subscript_help"]):
         st.session_state[val_key] = inp + r"$_{N}$"
         st.session_state[ver_key] += 1
         st.rerun()
-    if c3.button("＋上付き", key=f"_bp_{key}", use_container_width=True,
-                 help="末尾に $^{N}$ を追加。Nを書き換えて使用"):
+    if c3.button(T["add_superscript"], key=f"_bp_{key}", use_container_width=True,
+                 help=T["superscript_help"]):
         st.session_state[val_key] = inp + r"$^{N}$"
         st.session_state[ver_key] += 1
         st.rerun()
@@ -193,7 +384,7 @@ def calc_cif_pattern(cif_bytes: bytes, two_theta_range=(5, 90)):
         mask = (pat.x >= two_theta_range[0]) & (pat.x <= two_theta_range[1])
         return pat.x[mask], pat.y[mask]
     except Exception as e:
-        st.warning(f"CIF エラー: {e}")
+        st.warning(T["cif_error"] + str(e))
         return None, None
     finally:
         os.unlink(tmp_path)
@@ -214,12 +405,11 @@ def parse_pdf_card(pdf_bytes: bytes, two_theta_range=(5, 90)):
                     for row in table:
                         if row is None:
                             continue
-                        # 左側: cols 0-4 (No, 2θ, d, intensity, hkl)
                         for offset in [0, 5]:
                             if len(row) < offset + 4:
                                 continue
                             try:
-                                int(str(row[offset]).strip())  # No.が整数かチェック
+                                int(str(row[offset]).strip())
                                 two_theta = float(str(row[offset + 1]).strip())
                                 intensity = float(str(row[offset + 3]).strip())
                                 if two_theta_range[0] <= two_theta <= two_theta_range[1]:
@@ -228,7 +418,7 @@ def parse_pdf_card(pdf_bytes: bytes, two_theta_range=(5, 90)):
                             except (ValueError, TypeError, AttributeError):
                                 continue
     except Exception as e:
-        st.warning(f"PDFカード解析エラー: {e}")
+        st.warning(T["pdf_error"] + str(e))
         return None, None
 
     if not two_thetas:
@@ -320,7 +510,7 @@ def color_picker_popover(key: str, default_hex: str):
         f'border:1px solid #ccc;margin-top:4px"></div>',
         unsafe_allow_html=True,
     )
-    with c_btn.popover("🎨 色を変更", use_container_width=True):
+    with c_btn.popover(T["change_color"], use_container_width=True):
         for family, colors in COLOR_FAMILIES.items():
             st.caption(family)
             cols = st.columns(len(colors))
@@ -430,27 +620,26 @@ def restore_session(json_bytes: bytes):
 
 # ===== サイドバー =====
 
-st.sidebar.header("💾 セッション")
+st.sidebar.header(T["session_header"])
 session_upload = st.sidebar.file_uploader(
-    "セッションを読み込む (.json)", type=["json"], key="_session_upload"
+    T["load_session"], type=["json"], key="_session_upload"
 )
 if session_upload is not None:
     restore_session(session_upload.read())
 
-st.sidebar.header("📂 XRDデータ")
+st.sidebar.header(T["xrd_data_header"])
 xrd_files = st.sidebar.file_uploader(
-    "XRDデータ (.xy / .txt / .csv)",
+    T["xrd_upload"],
     type=["xy", "txt", "csv"], accept_multiple_files=True,
 )
-st.sidebar.header("📂 リファレンス")
+st.sidebar.header(T["ref_header"])
 cif_files = st.sidebar.file_uploader(
-    "CIFファイル (.cif)", type=["cif"], accept_multiple_files=True,
+    T["cif_upload"], type=["cif"], accept_multiple_files=True,
 )
 pdf_ref_files = st.sidebar.file_uploader(
-    "PDFカード (.pdf)", type=["pdf"], accept_multiple_files=True,
+    T["pdf_upload"], type=["pdf"], accept_multiple_files=True,
 )
 
-# ファイルの確定（新規アップロード優先 → セッション復元）
 if xrd_files:
     st.session_state["_xrd_bytes"] = {f.name: f.read() for f in xrd_files}
     for f in xrd_files:
@@ -469,63 +658,71 @@ active_cif = [RestoredFile(n, d) for n, d in st.session_state.get("_cif_bytes", 
 active_pdf = [RestoredFile(n, d) for n, d in st.session_state.get("_pdf_bytes", {}).items()]
 
 if active_xrd and not xrd_files:
-    st.sidebar.caption("復元済み XRD: " + ", ".join(f.name for f in active_xrd))
+    st.sidebar.caption(T["restored_xrd"] + ", ".join(f.name for f in active_xrd))
 if active_cif and not cif_files:
-    st.sidebar.caption("復元済み CIF: " + ", ".join(f.name for f in active_cif))
+    st.sidebar.caption(T["restored_cif"] + ", ".join(f.name for f in active_cif))
 if active_pdf and not pdf_ref_files:
-    st.sidebar.caption("復元済み PDF: " + ", ".join(f.name for f in active_pdf))
+    st.sidebar.caption(T["restored_pdf"] + ", ".join(f.name for f in active_pdf))
 
-st.sidebar.header("⚙️ グラフ設定")
-xrange         = st.sidebar.slider("2θ 範囲 (°)", 5.0, 90.0, (10.0, 80.0), step=0.5, key="xrange")
+st.sidebar.header(T["graph_settings"])
+xrange         = st.sidebar.slider(T["xrange"], 5.0, 90.0, (10.0, 80.0), step=0.5, key="xrange")
 x_min, x_max   = xrange
-normalize      = st.sidebar.checkbox("強度を正規化（最大=1）", value=False, key="normalize")
-show_legend    = st.sidebar.checkbox("メイン凡例を表示", value=True, key="show_legend")
-show_cif_legend= st.sidebar.checkbox("ICDD ラベルをグラフ内に表示", value=True, key="show_cif_legend")
-show_peaks     = st.sidebar.checkbox("ピーク位置を表示", value=False, key="show_peaks")
-peak_prom      = st.sidebar.slider("ピーク感度", 0.01, 0.5, 0.1, step=0.01, key="peak_prom") if show_peaks else 0.1
-global_offset  = st.sidebar.slider("オフセット（倍率）", 0.0, 3.0, 1.0, step=0.05, key="global_offset") if normalize else None
+normalize      = st.sidebar.checkbox(T["normalize_cb"], value=False, key="normalize")
+show_legend    = st.sidebar.checkbox(T["show_legend_cb"], value=True, key="show_legend")
+show_cif_legend= st.sidebar.checkbox(T["show_cif_legend_cb"], value=True, key="show_cif_legend")
+show_peaks     = st.sidebar.checkbox(T["show_peaks_cb"], value=False, key="show_peaks")
+peak_prom      = st.sidebar.slider(T["peak_sensitivity"], 0.01, 0.5, 0.1, step=0.01, key="peak_prom") if show_peaks else 0.1
+global_offset  = st.sidebar.slider(T["offset_multiplier"], 0.0, 3.0, 1.0, step=0.05, key="global_offset") if normalize else None
 
-st.sidebar.subheader("目盛り設定")
-major_tick  = st.sidebar.number_input("主目盛り間隔 (°)", min_value=1.0, max_value=30.0,
+st.sidebar.subheader(T["tick_settings"])
+major_tick  = st.sidebar.number_input(T["major_tick"], min_value=1.0, max_value=30.0,
                                        value=10.0, step=1.0, key="major_tick")
-show_minor  = st.sidebar.checkbox("副目盛りを表示", value=True, key="show_minor")
-minor_tick  = st.sidebar.number_input("副目盛り間隔 (°)", min_value=0.5, max_value=10.0,
+show_minor  = st.sidebar.checkbox(T["show_minor_cb"], value=True, key="show_minor")
+minor_tick  = st.sidebar.number_input(T["minor_tick"], min_value=0.5, max_value=10.0,
                                        value=2.0, step=0.5, key="minor_tick") if show_minor else None
 
-st.sidebar.subheader("ICDD ラベル設定")
+# 左/右 の内部値は言語に関わらず固定し、format_func で表示を翻訳する
+_LR_OPTIONS = ["左", "右"]
+_lr_fmt = lambda x: T["left"] if x == "左" else T["right"]
+
+st.sidebar.subheader(T["icdd_label_settings"])
 if show_cif_legend:
-    cif_label_side     = st.sidebar.radio("ICDDラベル位置", ["左", "右"], horizontal=True, key="cif_label_side")
-    cif_label_fontsize = st.sidebar.slider("ICDDラベル文字サイズ", 5, 20, 9, key="cif_label_fontsize")
-    cif_label_offset_x = st.sidebar.slider("ICDD横オフセット (°)", 0.0, 10.0, 0.5, step=0.1,
-                                            help="端からの距離（°）", key="cif_label_offset_x")
-    cif_label_offset_y = st.sidebar.slider("ICDD縦オフセット（行高さ比）", 0.0, 1.0, 0.5, step=0.05,
-                                            help="0=行の下端、1.0=行の上端", key="cif_label_offset_y")
+    cif_label_side     = st.sidebar.radio(T["icdd_label_pos"], _LR_OPTIONS,
+                                           format_func=_lr_fmt, horizontal=True,
+                                           key="cif_label_side")
+    cif_label_fontsize = st.sidebar.slider(T["icdd_label_fontsize"], 5, 20, 9, key="cif_label_fontsize")
+    cif_label_offset_x = st.sidebar.slider(T["icdd_offset_x"], 0.0, 10.0, 0.5, step=0.1,
+                                            help=T["icdd_offset_x_help"], key="cif_label_offset_x")
+    cif_label_offset_y = st.sidebar.slider(T["icdd_offset_y"], 0.0, 1.0, 0.5, step=0.05,
+                                            help=T["icdd_offset_y_help"], key="cif_label_offset_y")
 else:
     cif_label_side, cif_label_fontsize = "左", 9
     cif_label_offset_x, cif_label_offset_y = 0.5, 0.5
 
-st.sidebar.subheader("サンプルラベル（グラフ内）")
-show_side_labels = st.sidebar.checkbox("グラフ内にラベルを表示", value=False, key="show_side_labels")
+st.sidebar.subheader(T["sample_labels"])
+show_side_labels = st.sidebar.checkbox(T["show_side_labels_cb"], value=False, key="show_side_labels")
 if show_side_labels:
-    label_side      = st.sidebar.radio("ラベル位置", ["左", "右"], horizontal=True, key="label_side")
-    label_fontsize  = st.sidebar.slider("ラベル文字サイズ", 5, 24, 11, key="label_fontsize")
-    label_offset_x  = st.sidebar.slider("横オフセット（°）", -5.0, 5.0, 0.5, step=0.1,
-                                         help="正=グラフ内側、負=グラフ外側", key="label_offset_x")
-    label_offset_y  = st.sidebar.slider("縦オフセット（パターン高さ比）", -0.3, 1.0, 0.05, step=0.01,
-                                         help="0=ベースライン、1.0=ピーク付近", key="label_offset_y")
+    label_side      = st.sidebar.radio(T["label_pos"], _LR_OPTIONS,
+                                        format_func=_lr_fmt, horizontal=True,
+                                        key="label_side")
+    label_fontsize  = st.sidebar.slider(T["label_fontsize"], 5, 24, 11, key="label_fontsize")
+    label_offset_x  = st.sidebar.slider(T["label_offset_x"], -5.0, 5.0, 0.5, step=0.1,
+                                         help=T["label_offset_x_help"], key="label_offset_x")
+    label_offset_y  = st.sidebar.slider(T["label_offset_y"], -0.3, 1.0, 0.05, step=0.01,
+                                         help=T["label_offset_y_help"], key="label_offset_y")
 else:
     label_side, label_fontsize, label_offset_x, label_offset_y = "右", 11, 0.5, 0.05
 
-st.sidebar.header("📐 図サイズ・出力")
-fig_width  = st.sidebar.slider("図の幅 (inch)", 6.0, 20.0, 10.0, step=0.5, key="fig_width")
-fig_height = st.sidebar.slider("図の高さ (inch)", 4.0, 20.0, 8.0, step=0.5, key="fig_height")
-dpi_export = st.sidebar.selectbox("出力 DPI", [300, 600], index=0, key="dpi_export")
-font_size  = st.sidebar.slider("フォントサイズ", 8, 20, 14, key="font_size")
+st.sidebar.header(T["fig_size"])
+fig_width  = st.sidebar.slider(T["fig_width"], 6.0, 20.0, 10.0, step=0.5, key="fig_width")
+fig_height = st.sidebar.slider(T["fig_height"], 4.0, 20.0, 8.0, step=0.5, key="fig_height")
+dpi_export = st.sidebar.selectbox("Output DPI", [300, 600], index=0, key="dpi_export")
+font_size  = st.sidebar.slider(T["font_size"], 8, 20, 14, key="font_size")
 
 st.sidebar.divider()
 if active_xrd:
     st.sidebar.download_button(
-        "💾 セッションを保存 (.json)",
+        T["save_session"],
         data=build_session_json(len(active_xrd), len(active_cif), len(active_pdf)),
         file_name="xrd_session.json",
         mime="application/json",
@@ -535,7 +732,7 @@ if active_xrd:
 
 # ===== メインエリア =====
 
-show_panel = st.toggle("⚙️ パターン設定パネルを表示", value=True, key="show_panel")
+show_panel = st.toggle(T["show_panel"], value=True, key="show_panel")
 
 if active_xrd:
     if show_panel:
@@ -555,17 +752,17 @@ if active_xrd:
         with col_settings:
             with st.container(height=700):
 
-                st.markdown("#### XRD パターン")
+                st.markdown(T["xrd_patterns"])
                 for i, f in enumerate(active_xrd):
                     default_name = os.path.splitext(f.name)[0]
                     default_hex  = ALL_COLORS[i % len(ALL_COLORS)]
 
                     with st.expander(f"**{i+1}. {default_name}**", expanded=True):
                         order = st.number_input(
-                            "表示順", value=i + 1, min_value=1, max_value=50,
+                            T["display_order"], value=i + 1, min_value=1, max_value=50,
                             key=f"ord_{i}",
                         )
-                        visible = st.checkbox("表示する", value=True, key=f"vis_{i}")
+                        visible = st.checkbox(T["show_cb"], value=True, key=f"vis_{i}")
                         label   = label_input(key=f"lbl_{i}", default=default_name)
                         chosen_color = color_picker_popover(f"xrd_color_{i}", default_hex)
 
@@ -574,14 +771,14 @@ if active_xrd:
                             if eoff_key not in st.session_state:
                                 st.session_state[eoff_key] = 0.0
                             st.slider(
-                                "オフセット調整",
+                                T["offset_adj"],
                                 min_value=-5.0, max_value=15.0,
                                 step=0.05,
                                 key=eoff_key,
                             )
                         else:
                             yoff = st.number_input(
-                                "Y位置（絶対値）", value=0.0, step=100.0,
+                                T["y_position"], value=0.0, step=100.0,
                                 format="%.1f", key=f"yoff_{i}",
                             )
                             abs_offsets.append(yoff)
@@ -596,7 +793,7 @@ if active_xrd:
                 n_xrd = len(active_xrd)
                 has_any_ref = bool(active_cif) or bool(active_pdf)
                 if has_any_ref:
-                    st.markdown("#### リファレンス")
+                    st.markdown(T["reference_header"])
 
                 if active_cif:
                     st.markdown("**CIF**")
@@ -607,10 +804,10 @@ if active_xrd:
 
                         with st.expander(f"**CIF {i+1}. {file_stem}**", expanded=True):
                             order   = st.number_input(
-                                "表示順", value=i + 1, min_value=1, max_value=50,
+                                T["display_order"], value=i + 1, min_value=1, max_value=50,
                                 key=f"cord_{i}",
                             )
-                            visible = st.checkbox("表示する", value=True, key=f"cvis_{i}")
+                            visible = st.checkbox(T["show_cb"], value=True, key=f"cvis_{i}")
                             label   = label_input(key=f"clbl_{i}", default=smart_label)
                             chosen_color = color_picker_popover(f"cif_color_{i}", default_hex)
 
@@ -622,7 +819,7 @@ if active_xrd:
                     cif_sort_idx = sorted(range(len(active_cif)), key=lambda i: cif_orders[i])
 
                 if active_pdf:
-                    st.markdown("**PDFカード**")
+                    st.markdown(T["pdf_card_md"])
                     n_offset = n_xrd + len(active_cif)
                     for i, f in enumerate(active_pdf):
                         file_stem   = os.path.splitext(f.name)[0]
@@ -631,10 +828,10 @@ if active_xrd:
 
                         with st.expander(f"**PDF {i+1}. {file_stem}**", expanded=True):
                             order   = st.number_input(
-                                "表示順", value=len(active_cif) + i + 1,
+                                T["display_order"], value=len(active_cif) + i + 1,
                                 min_value=1, max_value=50, key=f"pord_{i}",
                             )
-                            visible = st.checkbox("表示する", value=True, key=f"pvis_{i}")
+                            visible = st.checkbox(T["show_cb"], value=True, key=f"pvis_{i}")
                             label   = label_input(key=f"plbl_{i}", default=smart_label)
                             chosen_color = color_picker_popover(f"pdf_color_{i}", default_hex)
 
@@ -684,7 +881,6 @@ if active_xrd:
 
     # ===== 統合リファレンスリストの構築（CIF + PDF、表示順でソート） =====
     def build_ref_list():
-        """CIFとPDFを統合し、表示順でソートしたリファレンスリストを返す。"""
         refs = []
         for i in (cif_sort_idx or range(len(active_cif))):
             if i < len(cif_visibles) and not cif_visibles[i]:
@@ -1028,7 +1224,7 @@ if active_xrd:
     # ===== 描画 & ダウンロード =====
     with col_graph:
         pfig = build_plotly_figure()
-        st.caption("ドラッグで範囲ズーム ／ ダブルクリックでリセット")
+        st.caption(T["drag_zoom"])
         st.plotly_chart(pfig, use_container_width=True, config={
             "scrollZoom": True,
             "modeBarButtonsToAdd": ["drawrect"],
@@ -1041,21 +1237,21 @@ if active_xrd:
         fig.savefig(buf, format="tiff", dpi=dpi_export, bbox_inches="tight")
         buf.seek(0)
         st.download_button(
-            f"📥 TIFF として保存 ({dpi_export} DPI)",
+            T["save_tiff"].format(dpi=dpi_export),
             data=buf, file_name="xrd_result.tiff", mime="image/tiff",
         )
         buf_png = io.BytesIO()
         fig.savefig(buf_png, format="png", dpi=150, bbox_inches="tight")
         buf_png.seek(0)
         st.download_button(
-            "📥 PNG として保存（確認用）",
+            T["save_png"],
             data=buf_png, file_name="xrd_result.png", mime="image/png",
         )
         plt.close(fig)
 
 else:
-    st.info("サイドバーから XRD データファイル（.xy / .txt / .csv）をアップロードしてください。")
+    st.info(T["upload_prompt"])
     if not PYMATGEN_AVAILABLE:
-        st.warning("pymatgen が未インストールのため CIF リファレンス機能は無効です。")
+        st.warning(T["no_pymatgen"])
     if not PDFPLUMBER_AVAILABLE:
-        st.warning("pdfplumber が未インストールのため PDFカード リファレンス機能は無効です。")
+        st.warning(T["no_pdfplumber"])

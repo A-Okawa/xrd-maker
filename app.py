@@ -648,12 +648,7 @@ def _remap_file_session_state(old_names: list, new_names: list, key_tmpls: list)
 
 # ===== サイドバー =====
 
-st.sidebar.header(T["session_header"])
-session_upload = st.sidebar.file_uploader(
-    T["load_session"], type=["json"], key="_session_upload"
-)
-if session_upload is not None:
-    restore_session(session_upload.read())
+st.sidebar.caption("Last updated: 2026-06-19")
 
 st.sidebar.header(T["xrd_data_header"])
 xrd_files = st.sidebar.file_uploader(
@@ -1331,13 +1326,6 @@ if active_xrd:
             use_container_width=True,
         )
         st.sidebar.divider()
-        st.sidebar.download_button(
-            T["save_session"],
-            data=build_session_json(len(active_xrd), len(active_cif), len(active_pdf)),
-            file_name="xrd_session.json",
-            mime="application/json",
-            use_container_width=True,
-        )
 
 else:
     st.info(T["upload_prompt"])
@@ -1345,3 +1333,17 @@ else:
         st.warning(T["no_pymatgen"])
     if not PDFPLUMBER_AVAILABLE:
         st.warning(T["no_pdfplumber"])
+
+session_upload = st.sidebar.file_uploader(
+    T["load_session"], type=["json"], key="_session_upload"
+)
+if session_upload is not None:
+    restore_session(session_upload.read())
+if active_xrd:
+    st.sidebar.download_button(
+        T["save_session"],
+        data=build_session_json(len(active_xrd), len(active_cif), len(active_pdf)),
+        file_name="xrd_session.json",
+        mime="application/json",
+        use_container_width=True,
+    )

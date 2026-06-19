@@ -11,6 +11,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import io
 import os
+import re
 import tempfile
 import json
 import base64
@@ -237,6 +238,65 @@ def parse_pdf_card(pdf_bytes: bytes, two_theta_range=(5, 90)):
     x = np.array([p[0] for p in pairs])
     y = np.array([p[1] for p in pairs])
     return x, y
+
+
+def extract_cif_label(cif_bytes: bytes) -> str | None:
+    """CIFからICSD番号・組成式・鉱物名を抽出してラベル文字列を返す。"""
+    text = cif_bytes.decode("utf-8", errors="ignore")
+    icsd_no = None
+    formula = None
+    name = None
+    for line in text.splitlines():
+        s = line.strip()
+        if re.match(r'_database_code_ICSD\b', s, re.I):
+            m = re.search(r'(\d+)', s)
+            if m:
+                icsd_no = m.group(1)
+        elif re.match(r'_chemical_formula_sum\b', s, re.I) and formula is None:
+            m = re.search(r"['\"](.+?)['\"]", s)
+            if m:
+                formula = m.group(1).replace(" ", "")
+        elif re.match(r'_chemical_name_(?:mineral|common|systematic)\b', s, re.I) and name is None:
+            m = re.search(r"['\"](.+?)['\"]", s)
+            if m:
+                val = m.group(1).strip()
+                if val and val != "?" and val.lower() != "unknown":
+                    name = val
+    parts = []
+    if icsd_no:
+        parts.append(f"ICSD No. {icsd_no}")
+    if name:
+        parts.append(name)
+    elif formula:
+        parts.append(formula)
+    return ", ".join(parts) if parts else None
+
+
+def extract_pdf_card_label(pdf_bytes: bytes) -> str | None:
+    """PDFカードからカード番号と物質名を抽出してラベル文字列を返す。"""
+    if not PDFPLUMBER_AVAILABLE:
+        return None
+    card_no = None
+    mat_name = None
+    try:
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            if not pdf.pages:
+                return None
+            text = pdf.pages[0].extract_text() or ""
+            m = re.search(r'PDFカード番号[:\s：]+([0-9\-]+)', text)
+            if m:
+                card_no = m.group(1).strip()
+            m = re.search(r'名称[:\s：]*(.+?)(?:\s+I/Ic|\s+RIR|\n|$)', text)
+            if m:
+                mat_name = m.group(1).strip()
+    except Exception:
+        return None
+    parts = []
+    if card_no:
+        parts.append(f"PDF No. {card_no}")
+    if mat_name:
+        parts.append(mat_name)
+    return ", ".join(parts) if parts else None
 
 
 def detect_peaks(x, y, prominence=0.1, min_dist_deg=0.5):
@@ -541,16 +601,17 @@ if active_xrd:
                 if active_cif:
                     st.markdown("**CIF**")
                     for i, f in enumerate(active_cif):
-                        default_name = os.path.splitext(f.name)[0]
+                        file_stem    = os.path.splitext(f.name)[0]
+                        smart_label  = extract_cif_label(f.read()) or file_stem
                         default_hex  = ALL_COLORS[(n_xrd + i) % len(ALL_COLORS)]
 
-                        with st.expander(f"**CIF {i+1}. {default_name}**", expanded=True):
+                        with st.expander(f"**CIF {i+1}. {file_stem}**", expanded=True):
                             order   = st.number_input(
                                 "表示順", value=i + 1, min_value=1, max_value=50,
                                 key=f"cord_{i}",
                             )
                             visible = st.checkbox("表示する", value=True, key=f"cvis_{i}")
-                            label   = label_input(key=f"clbl_{i}", default=default_name)
+                            label   = label_input(key=f"clbl_{i}", default=smart_label)
                             chosen_color = color_picker_popover(f"cif_color_{i}", default_hex)
 
                         cif_orders.append(order)
@@ -564,16 +625,17 @@ if active_xrd:
                     st.markdown("**PDFカード**")
                     n_offset = n_xrd + len(active_cif)
                     for i, f in enumerate(active_pdf):
-                        default_name = os.path.splitext(f.name)[0]
-                        default_hex  = ALL_COLORS[(n_offset + i) % len(ALL_COLORS)]
+                        file_stem   = os.path.splitext(f.name)[0]
+                        smart_label = extract_pdf_card_label(f.read()) or file_stem
+                        default_hex = ALL_COLORS[(n_offset + i) % len(ALL_COLORS)]
 
-                        with st.expander(f"**PDF {i+1}. {default_name}**", expanded=True):
+                        with st.expander(f"**PDF {i+1}. {file_stem}**", expanded=True):
                             order   = st.number_input(
                                 "表示順", value=len(active_cif) + i + 1,
                                 min_value=1, max_value=50, key=f"pord_{i}",
                             )
                             visible = st.checkbox("表示する", value=True, key=f"pvis_{i}")
-                            label   = label_input(key=f"plbl_{i}", default=default_name)
+                            label   = label_input(key=f"plbl_{i}", default=smart_label)
                             chosen_color = color_picker_popover(f"pdf_color_{i}", default_hex)
 
                         pdf_orders.append(order)
@@ -602,9 +664,10 @@ if active_xrd:
         if active_cif:
             for i, f in enumerate(active_cif):
                 key = f"cif_color_{i}"
+                fallback = extract_cif_label(f.read()) or os.path.splitext(f.name)[0]
                 cif_orders.append(i + 1)
                 cif_visibles.append(st.session_state.get(f"cvis_{i}", True))
-                cif_labels.append(st.session_state.get(f"_val_clbl_{i}", os.path.splitext(f.name)[0]))
+                cif_labels.append(st.session_state.get(f"_val_clbl_{i}", fallback))
                 cif_colors.append(st.session_state.get(key, ALL_COLORS[(n_xrd + i) % len(ALL_COLORS)]))
             cif_sort_idx = list(range(len(active_cif)))
 
@@ -612,9 +675,10 @@ if active_xrd:
             n_offset = n_xrd + len(active_cif)
             for i, f in enumerate(active_pdf):
                 key = f"pdf_color_{i}"
+                fallback = extract_pdf_card_label(f.read()) or os.path.splitext(f.name)[0]
                 pdf_orders.append(len(active_cif) + i + 1)
                 pdf_visibles.append(st.session_state.get(f"pvis_{i}", True))
-                pdf_labels.append(st.session_state.get(f"_val_plbl_{i}", os.path.splitext(f.name)[0]))
+                pdf_labels.append(st.session_state.get(f"_val_plbl_{i}", fallback))
                 pdf_colors.append(st.session_state.get(key, ALL_COLORS[(n_offset + i) % len(ALL_COLORS)]))
             pdf_sort_idx = list(range(len(active_pdf)))
 

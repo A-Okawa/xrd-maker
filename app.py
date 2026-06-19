@@ -956,19 +956,21 @@ if active_xrd:
                 if len(y) == 0:
                     continue
 
+                y_min = np.min(y)
                 y_max = max(np.max(y), 1e-9)
 
                 if normalize:
                     y = y / y_max
+                    y_min_n = np.min(y)
                     y_max = 1.0
                     extra_off = float(st.session_state.get(f"extra_offset_{i}", 0.0))
                     baseline  = cumulative_y + extra_off
                     y_plot    = y + baseline
-                    side_labels.append((baseline + label_offset_y * y_max, colors_sel[i], labels[i]))
+                    side_labels.append((baseline + y_min_n + label_offset_y * (y_max - y_min_n), colors_sel[i], labels[i]))
                     cumulative_y += global_offset * y_max
                 else:
                     y_plot = y + abs_offsets[i]
-                    side_labels.append((abs_offsets[i] + label_offset_y * y_max, colors_sel[i], labels[i]))
+                    side_labels.append((abs_offsets[i] + y_min + label_offset_y * (y_max - y_min), colors_sel[i], labels[i]))
 
                 ax_main.plot(x, y_plot, color=colors_sel[i], linewidth=1.2, label=labels[i])
 
@@ -1088,18 +1090,20 @@ if active_xrd:
             x, y = x[mask], y[mask]
             if len(y) == 0:
                 continue
+            y_min = np.min(y)
             y_max = max(np.max(y), 1e-9)
 
             if normalize:
                 y = y / y_max
+                y_min_n = np.min(y)
                 y_max = 1.0
                 extra_off = float(st.session_state.get(f"extra_offset_{i}", 0.0))
                 y_plot  = y + cumulative_y + extra_off
-                y_label = cumulative_y + extra_off + label_offset_y * y_max
+                y_label = cumulative_y + extra_off + y_min_n + label_offset_y * (y_max - y_min_n)
                 cumulative_y += global_offset * y_max
             else:
                 y_plot  = y + abs_offsets[i]
-                y_label = abs_offsets[i] + label_offset_y * y_max
+                y_label = abs_offsets[i] + y_min + label_offset_y * (y_max - y_min)
 
             pfig.add_trace(go.Scatter(
                 x=x, y=y_plot, name=labels[i],

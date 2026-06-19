@@ -66,6 +66,7 @@ TRANSLATIONS = {
         "normalize_cb": "強度を正規化（最大=1）",
         "show_legend_cb": "メイン凡例を表示",
         "show_cif_legend_cb": "リファレンスラベルをグラフ内に表示",
+        "show_ref_lines_cb": "リファレンスピーク線をメインに表示（破線）",
         "show_peaks_cb": "ピーク位置を表示",
         "peak_sensitivity": "ピーク感度",
         "offset_multiplier": "オフセット（倍率）",
@@ -147,6 +148,7 @@ TRANSLATIONS = {
         "normalize_cb": "Normalize intensity (max=1)",
         "show_legend_cb": "Show main legend",
         "show_cif_legend_cb": "Show reference labels in plot",
+        "show_ref_lines_cb": "Show reference peak lines in main panel (dashed)",
         "show_peaks_cb": "Show peak positions",
         "peak_sensitivity": "Peak sensitivity",
         "offset_multiplier": "Offset (multiplier)",
@@ -533,7 +535,7 @@ def color_picker_popover(key: str, default_hex: str):
 
 # ===== セッション保存/復元 =====
 GLOBAL_KEYS = [
-    "normalize", "show_legend", "show_cif_legend", "show_peaks",
+    "normalize", "show_legend", "show_cif_legend", "show_ref_lines", "show_peaks",
     "peak_prom", "global_offset", "xrange", "major_tick", "show_minor",
     "minor_tick", "cif_label_side", "cif_label_fontsize",
     "cif_label_offset_x", "cif_label_offset_y", "show_side_labels",
@@ -712,6 +714,7 @@ x_min, x_max   = xrange
 normalize      = st.sidebar.checkbox(T["normalize_cb"], value=False, key="normalize")
 show_legend    = st.sidebar.checkbox(T["show_legend_cb"], value=True, key="show_legend")
 show_cif_legend= st.sidebar.checkbox(T["show_cif_legend_cb"], value=True, key="show_cif_legend")
+show_ref_lines = st.sidebar.checkbox(T["show_ref_lines_cb"], value=False, key="show_ref_lines")
 show_peaks     = st.sidebar.checkbox(T["show_peaks_cb"], value=False, key="show_peaks")
 peak_prom      = st.sidebar.slider(T["peak_sensitivity"], 0.01, 0.5, 0.1, step=0.01, key="peak_prom") if show_peaks else 0.1
 global_offset  = st.sidebar.slider(T["offset_multiplier"], 0.0, 3.0, 1.0, step=0.05, key="global_offset") if normalize else None
@@ -1077,6 +1080,10 @@ if active_xrd:
                                    linestyle="-", alpha=0.5, zorder=0)
                 ax_ref.vlines(x_ref, baseline, baseline + y_norm,
                               color=ref["color"], linewidth=1.0, label=ref["label"])
+                if show_ref_lines:
+                    ax_main.vlines(x_ref, *ax_main.get_ylim(),
+                                   color=ref["color"], linewidth=0.7,
+                                   linestyle="--", alpha=0.4, zorder=0)
                 if show_cif_legend:
                     lx = (x_min + cif_label_offset_x) if cif_label_side == "左" \
                          else (x_max - cif_label_offset_x)
@@ -1206,6 +1213,17 @@ if active_xrd:
                     line=dict(color=ref["color"], width=1.0),
                     mode="lines", showlegend=False,
                 ), row=2, col=1)
+                if show_ref_lines:
+                    for xv in x_ref:
+                        pfig.add_shape(
+                            type="line",
+                            x0=float(xv), x1=float(xv),
+                            y0=0, y1=1,
+                            xref="x", yref="y domain",
+                            line=dict(color=ref["color"], width=0.7, dash="dash"),
+                            opacity=0.4,
+                            row=1, col=1,
+                        )
                 if show_cif_legend:
                     lx = (x_min + cif_label_offset_x) if cif_label_side == "左" \
                          else (x_max - cif_label_offset_x)

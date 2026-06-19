@@ -768,14 +768,6 @@ dpi_export = st.sidebar.selectbox("Output DPI", [300, 600], index=0, key="dpi_ex
 font_size  = st.sidebar.slider(T["font_size"], 8, 20, 14, key="font_size")
 
 st.sidebar.divider()
-if active_xrd:
-    st.sidebar.download_button(
-        T["save_session"],
-        data=build_session_json(len(active_xrd), len(active_cif), len(active_pdf)),
-        file_name="xrd_session.json",
-        mime="application/json",
-        use_container_width=True,
-    )
 
 
 # ===== メインエリア =====
@@ -1315,28 +1307,37 @@ if active_xrd:
 
         _sl  = bool(show_legend)
         _scl = bool(show_cif_legend)
-        st.caption(f"🔍 [debug] show_legend={_sl} / show_cif_legend={_scl}")
         fig = build_figure(show_legend=_sl, show_cif_legend=_scl)
         buf_png = io.BytesIO()
         fig.savefig(buf_png, format="png", dpi=150, bbox_inches="tight")
         buf_png.seek(0)
         png_bytes = buf_png.getvalue()
-        st.image(png_bytes, caption="Export preview (matplotlib)", use_container_width=True)
-        buf = io.BytesIO()
-        fig.savefig(buf, format="tiff", dpi=dpi_export, bbox_inches="tight")
-        buf.seek(0)
-        tiff_bytes = buf.getvalue()
-        st.download_button(
+        buf_tiff = io.BytesIO()
+        fig.savefig(buf_tiff, format="tiff", dpi=dpi_export, bbox_inches="tight")
+        buf_tiff.seek(0)
+        tiff_bytes = buf_tiff.getvalue()
+        plt.close(fig)
+
+        st.sidebar.download_button(
             T["save_tiff"].format(dpi=dpi_export),
             data=tiff_bytes, file_name="xrd_result.tiff", mime="image/tiff",
             key=f"dl_tiff_{_sl}_{_scl}_{dpi_export}",
+            use_container_width=True,
         )
-        st.download_button(
+        st.sidebar.download_button(
             T["save_png"],
             data=png_bytes, file_name="xrd_result.png", mime="image/png",
             key=f"dl_png_{_sl}_{_scl}",
+            use_container_width=True,
         )
-        plt.close(fig)
+        st.sidebar.divider()
+        st.sidebar.download_button(
+            T["save_session"],
+            data=build_session_json(len(active_xrd), len(active_cif), len(active_pdf)),
+            file_name="xrd_session.json",
+            mime="application/json",
+            use_container_width=True,
+        )
 
 else:
     st.info(T["upload_prompt"])

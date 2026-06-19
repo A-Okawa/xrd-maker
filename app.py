@@ -318,7 +318,9 @@ def label_input(key: str, default: str = "") -> str:
         st.session_state[ver_key] = 0
 
     inp_key = f"_inp_{key}_v{st.session_state[ver_key]}"
-    inp = st.text_input(T["label"], value=st.session_state[val_key], key=inp_key)
+    if inp_key not in st.session_state:
+        st.session_state[inp_key] = st.session_state[val_key]
+    inp = st.text_input(T["label"], key=inp_key)
     st.session_state[val_key] = inp
 
     c1, c2, c3 = st.columns(3)
@@ -508,13 +510,12 @@ def color_picker_popover(key: str, default_hex: str):
         st.session_state[key] = default_hex
     current = st.session_state[key]
 
-    c_swatch, c_btn = st.columns([1, 3])
-    c_swatch.markdown(
-        f'<div style="background:{current};height:30px;border-radius:5px;'
-        f'border:1px solid #ccc;margin-top:4px"></div>',
+    st.markdown(
+        f'<div style="background:{current};height:20px;border-radius:5px;'
+        f'border:1px solid #ccc;margin-bottom:4px"></div>',
         unsafe_allow_html=True,
     )
-    with c_btn.popover(T["change_color"], use_container_width=True):
+    with st.popover(T["change_color"], use_container_width=True):
         for family, colors in COLOR_FAMILIES.items():
             st.caption(family)
             cols = st.columns(len(colors))
@@ -642,11 +643,7 @@ def _remap_file_session_state(old_names: list, new_names: list, key_tmpls: list)
                 if val is None:
                     continue
                 new_k = tmpl.format(new_i)
-                # ver_ キーはインクリメントしてウィジェットを再描画させる
-                if tmpl.startswith("_ver_") and isinstance(val, int):
-                    st.session_state[new_k] = val + 1
-                else:
-                    st.session_state[new_k] = val
+                st.session_state[new_k] = val
 
 
 # ===== サイドバー =====
@@ -714,8 +711,12 @@ st.sidebar.header(T["graph_settings"])
 xrange         = st.sidebar.slider(T["xrange"], 5.0, 90.0, (10.0, 80.0), step=0.5, key="xrange")
 x_min, x_max   = xrange
 normalize      = st.sidebar.checkbox(T["normalize_cb"], value=False, key="normalize")
-show_legend    = st.sidebar.checkbox(T["show_legend_cb"], value=True, key="show_legend")
-show_cif_legend= st.sidebar.checkbox(T["show_cif_legend_cb"], value=True, key="show_cif_legend")
+if "show_legend" not in st.session_state:
+    st.session_state["show_legend"] = True
+show_legend    = st.sidebar.checkbox(T["show_legend_cb"], key="show_legend")
+if "show_cif_legend" not in st.session_state:
+    st.session_state["show_cif_legend"] = True
+show_cif_legend= st.sidebar.checkbox(T["show_cif_legend_cb"], key="show_cif_legend")
 show_ref_lines = st.sidebar.checkbox(T["show_ref_lines_cb"], value=False, key="show_ref_lines")
 show_peaks     = st.sidebar.checkbox(T["show_peaks_cb"], value=False, key="show_peaks")
 peak_prom      = st.sidebar.slider(T["peak_sensitivity"], 0.01, 0.5, 0.1, step=0.01, key="peak_prom") if show_peaks else 0.1
@@ -732,8 +733,8 @@ minor_tick  = st.sidebar.number_input(T["minor_tick"], min_value=0.5, max_value=
 _LR_OPTIONS = ["左", "右"]
 _lr_fmt = lambda x: T["left"] if x == "左" else T["right"]
 
-st.sidebar.subheader(T["icdd_label_settings"])
 if show_cif_legend:
+    st.sidebar.subheader(T["icdd_label_settings"])
     cif_label_side     = st.sidebar.radio(T["icdd_label_pos"], _LR_OPTIONS,
                                            format_func=_lr_fmt, horizontal=True,
                                            key="cif_label_side")
@@ -967,7 +968,7 @@ if active_xrd:
         return refs
 
     # ===== 図の生成 =====
-    def build_figure():
+    def build_figure(show_legend=show_legend, show_cif_legend=show_cif_legend):
         from matplotlib.ticker import MultipleLocator
 
         refs = build_ref_list()
@@ -1129,7 +1130,7 @@ if active_xrd:
         return fig
 
     # ===== インタラクティブ Plotly プレビュー =====
-    def build_plotly_figure():
+    def build_plotly_figure(show_legend=show_legend, show_cif_legend=show_cif_legend):
         refs = build_ref_list()
         has_ref = bool(refs)
 
@@ -1312,20 +1313,28 @@ if active_xrd:
             "displaylogo": False,
         })
 
-        fig = build_figure()
-        buf = io.BytesIO()
-        fig.savefig(buf, format="tiff", dpi=dpi_export, bbox_inches="tight")
-        buf.seek(0)
-        st.download_button(
-            T["save_tiff"].format(dpi=dpi_export),
-            data=buf, file_name="xrd_result.tiff", mime="image/tiff",
-        )
+        _sl  = bool(show_legend)
+        _scl = bool(show_cif_legend)
+        st.caption(f"🔍 [debug] show_legend={_sl} / show_cif_legend={_scl}")
+        fig = build_figure(show_legend=_sl, show_cif_legend=_scl)
         buf_png = io.BytesIO()
         fig.savefig(buf_png, format="png", dpi=150, bbox_inches="tight")
         buf_png.seek(0)
+        png_bytes = buf_png.getvalue()
+        st.image(png_bytes, caption="Export preview (matplotlib)", use_container_width=True)
+        buf = io.BytesIO()
+        fig.savefig(buf, format="tiff", dpi=dpi_export, bbox_inches="tight")
+        buf.seek(0)
+        tiff_bytes = buf.getvalue()
+        st.download_button(
+            T["save_tiff"].format(dpi=dpi_export),
+            data=tiff_bytes, file_name="xrd_result.tiff", mime="image/tiff",
+            key=f"dl_tiff_{_sl}_{_scl}_{dpi_export}",
+        )
         st.download_button(
             T["save_png"],
-            data=buf_png, file_name="xrd_result.png", mime="image/png",
+            data=png_bytes, file_name="xrd_result.png", mime="image/png",
+            key=f"dl_png_{_sl}_{_scl}",
         )
         plt.close(fig)
 

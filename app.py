@@ -618,6 +618,33 @@ def restore_session(json_bytes: bytes):
     st.rerun()
 
 
+def _remap_file_session_state(old_names: list, new_names: list, key_tmpls: list):
+    """ファイルセットが変更された時、位置インデックスベースのキーをファイル名基準で再マップする。"""
+    # 旧インデックス→値 をファイル名でまとめて保存
+    old_vals: dict[str, dict] = {}
+    for old_i, name in enumerate(old_names):
+        old_vals[name] = {
+            tmpl: st.session_state.get(tmpl.format(old_i))
+            for tmpl in key_tmpls
+        }
+    # 旧キーをすべて削除
+    for old_i in range(len(old_names)):
+        for tmpl in key_tmpls:
+            st.session_state.pop(tmpl.format(old_i), None)
+    # 新インデックスに対応するファイル名の旧値を書き戻す
+    for new_i, name in enumerate(new_names):
+        if name in old_vals:
+            for tmpl, val in old_vals[name].items():
+                if val is None:
+                    continue
+                new_k = tmpl.format(new_i)
+                # ver_ キーはインクリメントしてウィジェットを再描画させる
+                if tmpl.startswith("_ver_") and isinstance(val, int):
+                    st.session_state[new_k] = val + 1
+                else:
+                    st.session_state[new_k] = val
+
+
 # ===== サイドバー =====
 
 st.sidebar.header(T["session_header"])
@@ -641,14 +668,29 @@ pdf_ref_files = st.sidebar.file_uploader(
 )
 
 if xrd_files:
+    _remap_file_session_state(
+        old_names=list(st.session_state.get("_xrd_bytes", {}).keys()),
+        new_names=[f.name for f in xrd_files],
+        key_tmpls=["vis_{}", "ord_{}", "_val_lbl_{}", "_ver_lbl_{}", "xrd_color_{}", "extra_offset_{}", "yoff_{}"],
+    )
     st.session_state["_xrd_bytes"] = {f.name: f.read() for f in xrd_files}
     for f in xrd_files:
         f.seek(0)
 if cif_files:
+    _remap_file_session_state(
+        old_names=list(st.session_state.get("_cif_bytes", {}).keys()),
+        new_names=[f.name for f in cif_files],
+        key_tmpls=["cvis_{}", "cord_{}", "_val_clbl_{}", "_ver_clbl_{}", "cif_color_{}"],
+    )
     st.session_state["_cif_bytes"] = {f.name: f.read() for f in cif_files}
     for f in cif_files:
         f.seek(0)
 if pdf_ref_files:
+    _remap_file_session_state(
+        old_names=list(st.session_state.get("_pdf_bytes", {}).keys()),
+        new_names=[f.name for f in pdf_ref_files],
+        key_tmpls=["pvis_{}", "pord_{}", "_val_plbl_{}", "_ver_plbl_{}", "pdf_color_{}"],
+    )
     st.session_state["_pdf_bytes"] = {f.name: f.read() for f in pdf_ref_files}
     for f in pdf_ref_files:
         f.seek(0)

@@ -67,6 +67,7 @@ TRANSLATIONS = {
         "show_legend_cb": "メイン凡例を表示",
         "show_cif_legend_cb": "リファレンスラベルをグラフ内に表示",
         "show_ref_lines_cb": "リファレンスピーク線をメインに表示（破線）",
+        "show_ref_line_each": "この破線を表示",
         "show_peaks_cb": "ピーク位置を表示",
         "peak_sensitivity": "ピーク感度",
         "offset_multiplier": "オフセット（倍率）",
@@ -149,6 +150,7 @@ TRANSLATIONS = {
         "show_legend_cb": "Show main legend",
         "show_cif_legend_cb": "Show reference labels in plot",
         "show_ref_lines_cb": "Show reference peak lines in main panel (dashed)",
+        "show_ref_line_each": "Show this line",
         "show_peaks_cb": "Show peak positions",
         "peak_sensitivity": "Peak sensitivity",
         "offset_multiplier": "Offset (multiplier)",
@@ -557,12 +559,12 @@ def build_session_json(n_xrd: int, n_cif: int, n_pdf: int) -> bytes:
             if k in st.session_state:
                 settings[k] = st.session_state[k]
     for i in range(n_cif):
-        for pat in ["cvis_{}", "cord_{}", "_val_clbl_{}", "cif_color_{}"]:
+        for pat in ["cvis_{}", "cord_{}", "_val_clbl_{}", "cif_color_{}", "cref_line_{}"]:
             k = pat.format(i)
             if k in st.session_state:
                 settings[k] = st.session_state[k]
     for i in range(n_pdf):
-        for pat in ["pvis_{}", "pord_{}", "_val_plbl_{}", "pdf_color_{}"]:
+        for pat in ["pvis_{}", "pord_{}", "_val_plbl_{}", "pdf_color_{}", "pref_line_{}"]:
             k = pat.format(i)
             if k in st.session_state:
                 settings[k] = st.session_state[k]
@@ -682,7 +684,7 @@ if cif_files:
     _remap_file_session_state(
         old_names=list(st.session_state.get("_cif_bytes", {}).keys()),
         new_names=[f.name for f in cif_files],
-        key_tmpls=["cvis_{}", "cord_{}", "_val_clbl_{}", "_ver_clbl_{}", "cif_color_{}"],
+        key_tmpls=["cvis_{}", "cord_{}", "_val_clbl_{}", "_ver_clbl_{}", "cif_color_{}", "cref_line_{}"],
     )
     st.session_state["_cif_bytes"] = {f.name: f.read() for f in cif_files}
     for f in cif_files:
@@ -691,7 +693,7 @@ if pdf_ref_files:
     _remap_file_session_state(
         old_names=list(st.session_state.get("_pdf_bytes", {}).keys()),
         new_names=[f.name for f in pdf_ref_files],
-        key_tmpls=["pvis_{}", "pord_{}", "_val_plbl_{}", "_ver_plbl_{}", "pdf_color_{}"],
+        key_tmpls=["pvis_{}", "pord_{}", "_val_plbl_{}", "_ver_plbl_{}", "pdf_color_{}", "pref_line_{}"],
     )
     st.session_state["_pdf_bytes"] = {f.name: f.read() for f in pdf_ref_files}
     for f in pdf_ref_files:
@@ -788,9 +790,9 @@ if active_xrd:
 
     orders, visibles, labels, colors_sel, abs_offsets = [], [], [], [], []
     sort_idx = []
-    cif_orders, cif_visibles, cif_labels, cif_colors = [], [], [], []
+    cif_orders, cif_visibles, cif_labels, cif_colors, cif_ref_lines = [], [], [], [], []
     cif_sort_idx = []
-    pdf_orders, pdf_visibles, pdf_labels, pdf_colors = [], [], [], []
+    pdf_orders, pdf_visibles, pdf_labels, pdf_colors, pdf_ref_lines = [], [], [], [], []
     pdf_sort_idx = []
 
     if show_panel and col_settings is not None:
@@ -855,11 +857,16 @@ if active_xrd:
                             visible = st.checkbox(T["show_cb"], value=True, key=f"cvis_{i}")
                             label   = label_input(key=f"clbl_{i}", default=smart_label)
                             chosen_color = color_picker_popover(f"cif_color_{i}", default_hex)
+                            if show_ref_lines:
+                                ref_line = st.checkbox(T["show_ref_line_each"], value=True, key=f"cref_line_{i}")
+                            else:
+                                ref_line = st.session_state.get(f"cref_line_{i}", True)
 
                         cif_orders.append(order)
                         cif_visibles.append(visible)
                         cif_labels.append(label)
                         cif_colors.append(chosen_color)
+                        cif_ref_lines.append(ref_line)
 
                     cif_sort_idx = sorted(range(len(active_cif)), key=lambda i: cif_orders[i])
 
@@ -879,11 +886,16 @@ if active_xrd:
                             visible = st.checkbox(T["show_cb"], value=True, key=f"pvis_{i}")
                             label   = label_input(key=f"plbl_{i}", default=smart_label)
                             chosen_color = color_picker_popover(f"pdf_color_{i}", default_hex)
+                            if show_ref_lines:
+                                ref_line = st.checkbox(T["show_ref_line_each"], value=True, key=f"pref_line_{i}")
+                            else:
+                                ref_line = st.session_state.get(f"pref_line_{i}", True)
 
                         pdf_orders.append(order)
                         pdf_visibles.append(visible)
                         pdf_labels.append(label)
                         pdf_colors.append(chosen_color)
+                        pdf_ref_lines.append(ref_line)
 
                     pdf_sort_idx = sorted(range(len(active_pdf)), key=lambda i: pdf_orders[i])
 
@@ -911,6 +923,7 @@ if active_xrd:
                 cif_visibles.append(st.session_state.get(f"cvis_{i}", True))
                 cif_labels.append(st.session_state.get(f"_val_clbl_{i}", fallback))
                 cif_colors.append(st.session_state.get(key, ALL_COLORS[(n_xrd + i) % len(ALL_COLORS)]))
+                cif_ref_lines.append(st.session_state.get(f"cref_line_{i}", True))
             cif_sort_idx = list(range(len(active_cif)))
 
         if active_pdf:
@@ -922,6 +935,7 @@ if active_xrd:
                 pdf_visibles.append(st.session_state.get(f"pvis_{i}", True))
                 pdf_labels.append(st.session_state.get(f"_val_plbl_{i}", fallback))
                 pdf_colors.append(st.session_state.get(key, ALL_COLORS[(n_offset + i) % len(ALL_COLORS)]))
+                pdf_ref_lines.append(st.session_state.get(f"pref_line_{i}", True))
             pdf_sort_idx = list(range(len(active_pdf)))
 
     # ===== 統合リファレンスリストの構築（CIF + PDF、表示順でソート） =====
@@ -936,6 +950,7 @@ if active_xrd:
                 "label": cif_labels[i] if i < len(cif_labels) else active_cif[i].name,
                 "color": cif_colors[i] if i < len(cif_colors) else "#000000",
                 "order": cif_orders[i] if i < len(cif_orders) else i,
+                "show_line": cif_ref_lines[i] if i < len(cif_ref_lines) else True,
             })
         for i in (pdf_sort_idx or range(len(active_pdf))):
             if i < len(pdf_visibles) and not pdf_visibles[i]:
@@ -946,6 +961,7 @@ if active_xrd:
                 "label": pdf_labels[i] if i < len(pdf_labels) else active_pdf[i].name,
                 "color": pdf_colors[i] if i < len(pdf_colors) else "#000000",
                 "order": pdf_orders[i] if i < len(pdf_orders) else i,
+                "show_line": pdf_ref_lines[i] if i < len(pdf_ref_lines) else True,
             })
         refs.sort(key=lambda r: r["order"])
         return refs
@@ -1080,7 +1096,7 @@ if active_xrd:
                                    linestyle="-", alpha=0.5, zorder=0)
                 ax_ref.vlines(x_ref, baseline, baseline + y_norm,
                               color=ref["color"], linewidth=1.0, label=ref["label"])
-                if show_ref_lines:
+                if show_ref_lines and ref.get("show_line", True):
                     ax_main.vlines(x_ref, *ax_main.get_ylim(),
                                    color=ref["color"], linewidth=0.7,
                                    linestyle="--", alpha=0.4, zorder=0)
@@ -1213,7 +1229,7 @@ if active_xrd:
                     line=dict(color=ref["color"], width=1.0),
                     mode="lines", showlegend=False,
                 ), row=2, col=1)
-                if show_ref_lines:
+                if show_ref_lines and ref.get("show_line", True):
                     for xv in x_ref:
                         pfig.add_shape(
                             type="line",

@@ -307,6 +307,15 @@ class RestoredFile:
         pass
 
 
+def mpl_to_plotly(text: str) -> str:
+    """matplotlib math notation ($_{x}$, $^{x}$, $\it{x}$) → Plotly HTML."""
+    import re
+    text = re.sub(r'\$_\{([^}]+)\}\$', r'<sub>\1</sub>', text)
+    text = re.sub(r'\$\^\{([^}]+)\}\$', r'<sup>\1</sup>', text)
+    text = re.sub(r'\$\\it\{([^}]+)\}\$', r'<i>\1</i>', text)
+    return text
+
+
 # ===== ラベル入力（書式ボタン付き） =====
 def label_input(key: str, default: str = "") -> str:
     val_key = f"_val_{key}"
@@ -648,7 +657,7 @@ def _remap_file_session_state(old_names: list, new_names: list, key_tmpls: list)
 
 # ===== サイドバー =====
 
-st.sidebar.caption("Last updated: 2026-06-19")
+st.sidebar.caption("Last updated: 2026-06-20")
 
 st.sidebar.header(T["xrd_data_header"])
 xrd_files = st.sidebar.file_uploader(
@@ -664,29 +673,35 @@ pdf_ref_files = st.sidebar.file_uploader(
 )
 
 if xrd_files:
-    _remap_file_session_state(
-        old_names=list(st.session_state.get("_xrd_bytes", {}).keys()),
-        new_names=[f.name for f in xrd_files],
-        key_tmpls=["vis_{}", "ord_{}", "_val_lbl_{}", "_ver_lbl_{}", "xrd_color_{}", "extra_offset_{}", "yoff_{}"],
-    )
+    _xrd_new = [f.name for f in xrd_files]
+    _xrd_old = list(st.session_state.get("_xrd_bytes", {}).keys())
+    if _xrd_new != _xrd_old:
+        _remap_file_session_state(
+            old_names=_xrd_old, new_names=_xrd_new,
+            key_tmpls=["vis_{}", "ord_{}", "_val_lbl_{}", "_ver_lbl_{}", "xrd_color_{}", "extra_offset_{}", "yoff_{}"],
+        )
     st.session_state["_xrd_bytes"] = {f.name: f.read() for f in xrd_files}
     for f in xrd_files:
         f.seek(0)
 if cif_files:
-    _remap_file_session_state(
-        old_names=list(st.session_state.get("_cif_bytes", {}).keys()),
-        new_names=[f.name for f in cif_files],
-        key_tmpls=["cvis_{}", "cord_{}", "_val_clbl_{}", "_ver_clbl_{}", "cif_color_{}", "cref_line_{}"],
-    )
+    _cif_new = [f.name for f in cif_files]
+    _cif_old = list(st.session_state.get("_cif_bytes", {}).keys())
+    if _cif_new != _cif_old:
+        _remap_file_session_state(
+            old_names=_cif_old, new_names=_cif_new,
+            key_tmpls=["cvis_{}", "cord_{}", "_val_clbl_{}", "_ver_clbl_{}", "cif_color_{}", "cref_line_{}"],
+        )
     st.session_state["_cif_bytes"] = {f.name: f.read() for f in cif_files}
     for f in cif_files:
         f.seek(0)
 if pdf_ref_files:
-    _remap_file_session_state(
-        old_names=list(st.session_state.get("_pdf_bytes", {}).keys()),
-        new_names=[f.name for f in pdf_ref_files],
-        key_tmpls=["pvis_{}", "pord_{}", "_val_plbl_{}", "_ver_plbl_{}", "pdf_color_{}", "pref_line_{}"],
-    )
+    _pdf_new = [f.name for f in pdf_ref_files]
+    _pdf_old = list(st.session_state.get("_pdf_bytes", {}).keys())
+    if _pdf_new != _pdf_old:
+        _remap_file_session_state(
+            old_names=_pdf_old, new_names=_pdf_new,
+            key_tmpls=["pvis_{}", "pord_{}", "_val_plbl_{}", "_ver_plbl_{}", "pdf_color_{}", "pref_line_{}"],
+        )
     st.session_state["_pdf_bytes"] = {f.name: f.read() for f in pdf_ref_files}
     for f in pdf_ref_files:
         f.seek(0)
@@ -1159,7 +1174,7 @@ if active_xrd:
                 y_label = abs_offsets[i] + y_min + label_offset_y * (y_max - y_min)
 
             pfig.add_trace(go.Scatter(
-                x=x, y=y_plot, name=labels[i],
+                x=x, y=y_plot, name=mpl_to_plotly(labels[i]),
                 line=dict(color=colors_sel[i], width=1.5),
                 mode="lines", showlegend=show_legend,
             ), row=1, col=1)
@@ -1183,7 +1198,7 @@ if active_xrd:
                 pfig.add_trace(go.Scatter(
                     x=[x_pos], y=[y_label],
                     mode="text",
-                    text=[labels[i]],
+                    text=[mpl_to_plotly(labels[i])],
                     textposition=textpos,
                     textfont=dict(color=colors_sel[i], size=label_fontsize, family="Arial"),
                     showlegend=False,
@@ -1213,7 +1228,7 @@ if active_xrd:
                     vx += [float(xi), float(xi), None]
                     vy += [float(baseline), float(baseline + yi), None]
                 pfig.add_trace(go.Scatter(
-                    x=vx, y=vy, name=ref["label"],
+                    x=vx, y=vy, name=mpl_to_plotly(ref["label"]),
                     line=dict(color=ref["color"], width=1.0),
                     mode="lines", showlegend=False,
                 ), row=2, col=1)
@@ -1236,7 +1251,7 @@ if active_xrd:
                         x=[lx],
                         y=[baseline + cif_label_offset_y * row_height],
                         mode="text",
-                        text=[ref["label"]],
+                        text=[mpl_to_plotly(ref["label"])],
                         textposition=textpos_cif,
                         textfont=dict(color=ref["color"], size=cif_label_fontsize, family="Arial"),
                         showlegend=False,

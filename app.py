@@ -106,6 +106,9 @@ TRANSLATIONS = {
         "reference_header": "#### リファレンス",
         "pdf_card_md": "**PDFカード**",
         "drag_zoom": "ドラッグで範囲ズーム ／ ダブルクリックでリセット",
+        "interactive_preview": "インタラクティブ",
+        "export_preview": "保存画像のプレビュー",
+        "export_preview_caption": "図サイズ: {width:g} × {height:g} inch · TIFF: {dpi} DPI（プレビューは150 DPI）",
         "save_tiff": "📥 TIFF として保存 ({dpi} DPI)",
         "save_png": "📥 PNG として保存（確認用）",
         "upload_prompt": "サイドバーから XRD データファイル（.xy / .txt / .csv）をアップロードしてください。",
@@ -189,6 +192,9 @@ TRANSLATIONS = {
         "reference_header": "#### Reference",
         "pdf_card_md": "**PDF Card**",
         "drag_zoom": "Drag to zoom / Double-click to reset",
+        "interactive_preview": "Interactive",
+        "export_preview": "Export preview",
+        "export_preview_caption": "Figure size: {width:g} × {height:g} inch · TIFF: {dpi} DPI (preview: 150 DPI)",
         "save_tiff": "📥 Save as TIFF ({dpi} DPI)",
         "save_png": "📥 Save as PNG (for preview)",
         "upload_prompt": "Upload XRD data files (.xy / .txt / .csv) from the sidebar.",
@@ -308,7 +314,7 @@ class RestoredFile:
 
 
 def mpl_to_plotly(text: str) -> str:
-    """matplotlib math notation ($_{x}$, $^{x}$, $\it{x}$) → Plotly HTML."""
+    r"""matplotlib math notation ($_{x}$, $^{x}$, $\it{x}$) → Plotly HTML."""
     import re
     text = re.sub(r'\$_\{([^}]+)\}\$', r'<sub>\1</sub>', text)
     text = re.sub(r'\$\^\{([^}]+)\}\$', r'<sup>\1</sup>', text)
@@ -353,6 +359,16 @@ def label_input(key: str, default: str = "") -> str:
 
 # ===== データ読み込み =====
 def read_xrd_data(file_bytes: bytes, filename: str = ""):
+    def clean_data(rows):
+        arr = np.asarray(rows, dtype=float)
+        if arr.ndim != 2 or arr.shape[1] < 2:
+            return None
+        arr = arr[:, :2]
+        arr = arr[np.isfinite(arr).all(axis=1)]
+        if not len(arr):
+            return None
+        return arr[np.argsort(arr[:, 0], kind="stable")]
+
     ext = os.path.splitext(filename)[1].lower()
     text = file_bytes.decode("utf-8", errors="ignore")
     if ext == ".csv":
@@ -363,7 +379,9 @@ def read_xrd_data(file_bytes: bytes, filename: str = ""):
             except (ValueError, TypeError):
                 df = pd.read_csv(io.StringIO(text))
             arr = df.iloc[:, :2].apply(pd.to_numeric, errors="coerce").dropna().values
-            return arr if len(arr) > 0 else None
+            data = clean_data(arr)
+            if data is not None:
+                return data
         except Exception:
             pass
     rows = []
@@ -380,7 +398,7 @@ def read_xrd_data(file_bytes: bytes, filename: str = ""):
             rows.append([x, float(y_str)])
         except ValueError:
             continue
-    return np.array(rows) if rows else None
+    return clean_data(rows) if rows else None
 
 
 def calc_cif_pattern(cif_bytes: bytes, two_theta_range=(5, 90)):
@@ -505,9 +523,11 @@ def extract_pdf_card_label(pdf_bytes: bytes) -> str | None:
 
 
 def detect_peaks(x, y, prominence=0.1, min_dist_deg=0.5):
-    if len(y) == 0:
-        return np.array([])
-    dx = np.mean(np.diff(x)) if len(x) > 1 else 1.0
+    if len(y) < 3:
+        return np.array([], dtype=int)
+    spacings = np.diff(x)
+    positive_spacings = spacings[spacings > 0]
+    dx = np.mean(positive_spacings) if len(positive_spacings) else 1.0
     dist = max(1, int(min_dist_deg / dx))
     pks, _ = find_peaks(y, prominence=prominence * np.max(y), distance=dist)
     return pks
@@ -554,6 +574,15 @@ GLOBAL_KEYS = [
     "label_side", "label_fontsize", "label_offset_x", "label_offset_y",
     "fig_width", "fig_height", "dpi_export", "font_size", "show_panel",
 ]
+
+# Keep conditional widget values when their controls are temporarily hidden.
+# Reassignment disconnects these values from Streamlit's widget cleanup.
+for _key in list(st.session_state):
+    if _key in GLOBAL_KEYS or re.fullmatch(
+        r"(?:vis|ord|extra_offset|yoff|cvis|cord|cref_line|pvis|pord|pref_line)_\d+",
+        _key,
+    ):
+        st.session_state[_key] = st.session_state[_key]
 
 
 def build_session_json(n_xrd: int, n_cif: int, n_pdf: int) -> bytes:
@@ -657,7 +686,7 @@ def _remap_file_session_state(old_names: list, new_names: list, key_tmpls: list)
 
 # ===== サイドバー =====
 
-st.sidebar.caption("Last updated: 2026-06-20")
+st.sidebar.caption("Last updated: 2026-10-22")
 
 st.sidebar.header(T["xrd_data_header"])
 xrd_files = st.sidebar.file_uploader(
@@ -905,7 +934,7 @@ if active_xrd:
     else:
         for i, f in enumerate(active_xrd):
             key = f"xrd_color_{i}"
-            orders.append(i + 1)
+            orders.append(st.session_state.get(f"ord_{i}", i + 1))
             visibles.append(st.session_state.get(f"vis_{i}", True))
             labels.append(st.session_state.get(f"_val_lbl_{i}", os.path.splitext(f.name)[0]))
             colors_sel.append(st.session_state.get(key, ALL_COLORS[i % len(ALL_COLORS)]))
@@ -915,31 +944,31 @@ if active_xrd:
                     st.session_state[eoff_key] = 0.0
             else:
                 abs_offsets.append(st.session_state.get(f"yoff_{i}", 0.0))
-        sort_idx = list(range(len(active_xrd)))
+        sort_idx = sorted(range(len(active_xrd)), key=lambda i: orders[i])
 
         n_xrd = len(active_xrd)
         if active_cif:
             for i, f in enumerate(active_cif):
                 key = f"cif_color_{i}"
                 fallback = extract_cif_label(f.read()) or os.path.splitext(f.name)[0]
-                cif_orders.append(i + 1)
+                cif_orders.append(st.session_state.get(f"cord_{i}", i + 1))
                 cif_visibles.append(st.session_state.get(f"cvis_{i}", True))
                 cif_labels.append(st.session_state.get(f"_val_clbl_{i}", fallback))
                 cif_colors.append(st.session_state.get(key, ALL_COLORS[(n_xrd + i) % len(ALL_COLORS)]))
                 cif_ref_lines.append(st.session_state.get(f"cref_line_{i}", True))
-            cif_sort_idx = list(range(len(active_cif)))
+            cif_sort_idx = sorted(range(len(active_cif)), key=lambda i: cif_orders[i])
 
         if active_pdf:
             n_offset = n_xrd + len(active_cif)
             for i, f in enumerate(active_pdf):
                 key = f"pdf_color_{i}"
                 fallback = extract_pdf_card_label(f.read()) or os.path.splitext(f.name)[0]
-                pdf_orders.append(len(active_cif) + i + 1)
+                pdf_orders.append(st.session_state.get(f"pord_{i}", len(active_cif) + i + 1))
                 pdf_visibles.append(st.session_state.get(f"pvis_{i}", True))
                 pdf_labels.append(st.session_state.get(f"_val_plbl_{i}", fallback))
                 pdf_colors.append(st.session_state.get(key, ALL_COLORS[(n_offset + i) % len(ALL_COLORS)]))
                 pdf_ref_lines.append(st.session_state.get(f"pref_line_{i}", True))
-            pdf_sort_idx = list(range(len(active_pdf)))
+            pdf_sort_idx = sorted(range(len(active_pdf)), key=lambda i: pdf_orders[i])
 
     # ===== 統合リファレンスリストの構築（CIF + PDF、表示順でソート） =====
     def build_ref_list():
@@ -1089,7 +1118,7 @@ if active_xrd:
                     x_ref, y_ref = parse_pdf_card(
                         ref["file"].read(), two_theta_range=(x_min, x_max)
                     )
-                if x_ref is None:
+                if x_ref is None or y_ref is None or len(x_ref) == 0 or len(y_ref) == 0:
                     row += 1
                     continue
                 baseline = row * row_height
@@ -1100,9 +1129,10 @@ if active_xrd:
                 ax_ref.vlines(x_ref, baseline, baseline + y_norm,
                               color=ref["color"], linewidth=1.0, label=ref["label"])
                 if show_ref_lines and ref.get("show_line", True):
-                    ax_main.vlines(x_ref, *ax_main.get_ylim(),
-                                   color=ref["color"], linewidth=0.7,
-                                   linestyle="--", alpha=0.4, zorder=0)
+                    for xv in x_ref:
+                        ax_main.axvline(xv, ymin=0, ymax=1,
+                                       color=ref["color"], linewidth=0.7,
+                                       linestyle="--", alpha=0.4, zorder=0)
                 if show_cif_legend:
                     lx = (x_min + cif_label_offset_x) if cif_label_side == "左" \
                          else (x_max - cif_label_offset_x)
@@ -1218,7 +1248,7 @@ if active_xrd:
                     x_ref, y_ref = parse_pdf_card(
                         ref["file"].read(), two_theta_range=(x_min, x_max)
                     )
-                if x_ref is None:
+                if x_ref is None or y_ref is None or len(x_ref) == 0 or len(y_ref) == 0:
                     row += 1
                     continue
                 baseline = row * row_height
@@ -1306,14 +1336,16 @@ if active_xrd:
 
     # ===== 描画 & ダウンロード =====
     with col_graph:
+        interactive_tab, export_tab = st.tabs([T["interactive_preview"], T["export_preview"]])
         pfig = build_plotly_figure()
-        st.caption(T["drag_zoom"])
-        st.plotly_chart(pfig, use_container_width=True, config={
-            "scrollZoom": True,
-            "modeBarButtonsToAdd": ["drawrect"],
-            "modeBarButtonsToRemove": ["lasso2d", "select2d"],
-            "displaylogo": False,
-        })
+        with interactive_tab:
+            st.caption(T["drag_zoom"])
+            st.plotly_chart(pfig, use_container_width=True, config={
+                "scrollZoom": True,
+                "modeBarButtonsToAdd": ["drawrect"],
+                "modeBarButtonsToRemove": ["lasso2d", "select2d"],
+                "displaylogo": False,
+            })
 
         _sl  = bool(show_legend)
         _scl = bool(show_cif_legend)
@@ -1327,6 +1359,12 @@ if active_xrd:
         buf_tiff.seek(0)
         tiff_bytes = buf_tiff.getvalue()
         plt.close(fig)
+
+        with export_tab:
+            st.image(png_bytes, use_column_width=True)
+            st.caption(T["export_preview_caption"].format(
+                width=fig_width, height=fig_height, dpi=dpi_export,
+            ))
 
         st.sidebar.download_button(
             T["save_tiff"].format(dpi=dpi_export),

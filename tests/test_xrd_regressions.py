@@ -38,6 +38,9 @@ PARSER = argparse.ArgumentParser(add_help=False)
 PARSER.add_argument("--app", type=Path, default=DEFAULT_APP)
 OPTIONS, UNITTEST_ARGS = PARSER.parse_known_args()
 APP = OPTIONS.app.resolve()
+sys.path.insert(0, str(APP.parent))
+from project_io import GLOBAL_KEYS, PATTERN_KEY, encode_project, decode_project, ProjectError
+from xrd_io import read_patterns, XRDParseError
 SOURCE = APP.read_text(encoding="utf-8")
 TREE = ast.parse(SOURCE, filename=str(APP))
 
@@ -64,6 +67,9 @@ def renderer_namespace(normalize=False):
         np=np, pd=pd, plt=plt, gridspec=gridspec, go=go,
         make_subplots=make_subplots, find_peaks=find_peaks,
         io=io, os=os, re=re, json=json,
+        GLOBAL_KEYS=GLOBAL_KEYS, PATTERN_KEY=PATTERN_KEY,
+        encode_project=encode_project, decode_project=decode_project,
+        ProjectError=ProjectError, read_patterns=read_patterns, XRDParseError=XRDParseError,
         st=SimpleNamespace(session_state={
             "extra_offset_0": 0.35, "extra_offset_1": -0.2, "extra_offset_2": 1.1,
         }),

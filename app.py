@@ -15,6 +15,18 @@ import re
 import tempfile
 import json
 import base64
+from datetime import datetime
+from pathlib import Path
+
+from project_io import (
+    GLOBAL_KEYS, PATTERN_KEY, ProjectError, encode_project, decode_project,
+    atomic_save, project_fingerprint,
+)
+from xrd_io import read_patterns, XRDParseError, SUPPORTED_EXTENSIONS
+
+LOCAL_MODE = os.environ.get("XRD_MAKER_LOCAL") == "1"
+LOCAL_DATA_DIR = (Path(os.environ["XRD_MAKER_DATA_DIR"]).expanduser()
+                  if LOCAL_MODE and os.environ.get("XRD_MAKER_DATA_DIR") else None)
 
 try:
     from pymatgen.io.cif import CifParser
@@ -52,9 +64,25 @@ TRANSLATIONS = {
         "superscript_help": r"末尾に $^{N}$ を追加。Nを書き換えて使用",
         "change_color": "🎨 色を変更",
         "session_header": "💾 セッション",
-        "load_session": "セッションを読み込む (.json)",
+        "load_session": "保存した作業を開く (.json)",
+        "project_help": "測定データ、リファレンス、表示順、色、ラベル、図の設定をまとめて保存・再開できます。",
+        "project_loaded": "保存した作業を読み込みました。",
+        "project_error": "作業ファイルを開けませんでした: ",
+        "new_project": "新しい作業を始める",
+        "resume_local": "前回の自動保存から再開",
+        "autosaved": "PCに自動保存済み · {time}",
+        "autosave_error": "自動保存できませんでした。作業ファイルをダウンロードして保存してください: ",
+        "local_mode": "PC版 · データと自動保存はこのPC内に保存されます。",
+        "native_help": "Rigaku・Brukerの対応形式を読み込めます。複数スキャンは別パターンとして表示します。",
+        "read_error": "測定データを読み込めませんでした: ",
+        "duplicate_names": "同名のファイルがあります。ファイル名を変更して選び直してください（現在の作業は保持しています）: ",
+        "project_save_error": "作業ファイルを保存できません。データ量やラベルを確認してください: ",
+        "scan_count": "{files} ファイル · {scans} パターン",
+        "data_range": "測定データの全範囲を表示",
+        "download_desktop": "PC用をダウンロード (.zip)",
+        "desktop_help": "Mac・Windows対応。初回セットアップ後はオフラインで使用できます。",
         "xrd_data_header": "📂 XRDデータ",
-        "xrd_upload": "XRDデータ (.xy / .txt / .csv)",
+        "xrd_upload": "XRDデータ（装置の生データ・XY・CSV）",
         "ref_header": "📂 リファレンス",
         "cif_upload": "CIFファイル (.cif)",
         "pdf_upload": "PDFカード (.pdf)",
@@ -96,7 +124,7 @@ TRANSLATIONS = {
         "fig_width": "図の幅 (inch)",
         "fig_height": "図の高さ (inch)",
         "font_size": "フォントサイズ",
-        "save_session": "💾 セッションを保存 (.json)",
+        "save_session": "💾 作業を保存・ダウンロード (.json)",
         "show_panel": "⚙️ パターン設定パネルを表示",
         "xrd_patterns": "#### XRD パターン",
         "display_order": "表示順",
@@ -106,9 +134,12 @@ TRANSLATIONS = {
         "reference_header": "#### リファレンス",
         "pdf_card_md": "**PDFカード**",
         "drag_zoom": "ドラッグで範囲ズーム ／ ダブルクリックでリセット",
+        "interactive_preview": "インタラクティブ",
+        "export_preview": "保存画像のプレビュー",
+        "export_preview_caption": "図サイズ: {width:g} × {height:g} inch · TIFF: {dpi} DPI（プレビューは150 DPI）",
         "save_tiff": "📥 TIFF として保存 ({dpi} DPI)",
         "save_png": "📥 PNG として保存（確認用）",
-        "upload_prompt": "サイドバーから XRD データファイル（.xy / .txt / .csv）をアップロードしてください。",
+        "upload_prompt": "XRDデータを選択するか、保存した作業ファイル（.json）を開いてください。",
         "no_pymatgen": "pymatgen が未インストールのため CIF リファレンス機能は無効です。",
         "no_pdfplumber": "pdfplumber が未インストールのため PDFカード リファレンス機能は無効です。",
         "cif_error": "CIF エラー: ",
@@ -135,9 +166,25 @@ TRANSLATIONS = {
         "superscript_help": r"Appends $^{N}$ at the end. Replace N.",
         "change_color": "🎨 Change color",
         "session_header": "💾 Session",
-        "load_session": "Load session (.json)",
+        "load_session": "Open saved project (.json)",
+        "project_help": "Save and reopen measurements, references, order, colors, labels and figure settings together.",
+        "project_loaded": "Project restored.",
+        "project_error": "Could not open the project: ",
+        "new_project": "Start a new project",
+        "resume_local": "Resume the previous autosave",
+        "autosaved": "Autosaved on this PC · {time}",
+        "autosave_error": "Could not autosave. Download the project to keep your work: ",
+        "local_mode": "PC edition · Data and autosaves stay on this computer.",
+        "native_help": "Read supported Rigaku and Bruker files. Multiple scans are shown as separate patterns.",
+        "read_error": "Could not read measurement data: ",
+        "duplicate_names": "Files have duplicate names. Rename them and select again; your current work is kept: ",
+        "project_save_error": "Could not save the project. Check the data size and labels: ",
+        "scan_count": "{files} files · {scans} patterns",
+        "data_range": "Show the full measured range",
+        "download_desktop": "Download PC edition (.zip)",
+        "desktop_help": "For Mac and Windows. Works offline after the first setup.",
         "xrd_data_header": "📂 XRD Data",
-        "xrd_upload": "XRD Data (.xy / .txt / .csv)",
+        "xrd_upload": "XRD measurements (instrument files, XY, CSV)",
         "ref_header": "📂 Reference",
         "cif_upload": "CIF File (.cif)",
         "pdf_upload": "PDF Card (.pdf)",
@@ -179,7 +226,7 @@ TRANSLATIONS = {
         "fig_width": "Figure width (inch)",
         "fig_height": "Figure height (inch)",
         "font_size": "Font size",
-        "save_session": "💾 Save session (.json)",
+        "save_session": "💾 Save and download project (.json)",
         "show_panel": "⚙️ Show pattern settings panel",
         "xrd_patterns": "#### XRD Patterns",
         "display_order": "Display order",
@@ -189,9 +236,12 @@ TRANSLATIONS = {
         "reference_header": "#### Reference",
         "pdf_card_md": "**PDF Card**",
         "drag_zoom": "Drag to zoom / Double-click to reset",
+        "interactive_preview": "Interactive",
+        "export_preview": "Export preview",
+        "export_preview_caption": "Figure size: {width:g} × {height:g} inch · TIFF: {dpi} DPI (preview: 150 DPI)",
         "save_tiff": "📥 Save as TIFF ({dpi} DPI)",
         "save_png": "📥 Save as PNG (for preview)",
-        "upload_prompt": "Upload XRD data files (.xy / .txt / .csv) from the sidebar.",
+        "upload_prompt": "Choose XRD measurements or open a saved project (.json) to continue.",
         "no_pymatgen": "CIF reference is disabled (pymatgen not installed).",
         "no_pdfplumber": "PDF card reference is disabled (pdfplumber not installed).",
         "cif_error": "CIF error: ",
@@ -273,6 +323,8 @@ COLOR_FAMILIES = OrderedDict(
 
 # ===== パスワード認証 =====
 def check_password():
+    if LOCAL_MODE:
+        return True
     if st.session_state.get("authenticated"):
         return True
     pwd = st.secrets.get("password", "")
@@ -291,14 +343,17 @@ if not check_password():
 
 st.title("XRD Maker")
 st.caption(T["app_caption"])
+if LOCAL_MODE:
+    st.caption(T["local_mode"])
 
 
 # ===== RestoredFile =====
 class RestoredFile:
     """セッション復元時のファイル代替オブジェクト"""
-    def __init__(self, name: str, data: bytes):
+    def __init__(self, name: str, data: bytes, pattern=None):
         self.name = name
         self._data = data
+        self.pattern = pattern
 
     def read(self) -> bytes:
         return self._data
@@ -308,7 +363,7 @@ class RestoredFile:
 
 
 def mpl_to_plotly(text: str) -> str:
-    """matplotlib math notation ($_{x}$, $^{x}$, $\it{x}$) → Plotly HTML."""
+    r"""matplotlib math notation ($_{x}$, $^{x}$, $\it{x}$) → Plotly HTML."""
     import re
     text = re.sub(r'\$_\{([^}]+)\}\$', r'<sub>\1</sub>', text)
     text = re.sub(r'\$\^\{([^}]+)\}\$', r'<sup>\1</sup>', text)
@@ -353,34 +408,14 @@ def label_input(key: str, default: str = "") -> str:
 
 # ===== データ読み込み =====
 def read_xrd_data(file_bytes: bytes, filename: str = ""):
-    ext = os.path.splitext(filename)[1].lower()
-    text = file_bytes.decode("utf-8", errors="ignore")
-    if ext == ".csv":
-        try:
-            df = pd.read_csv(io.StringIO(text), header=None)
-            try:
-                pd.to_numeric(df.iloc[0, 0])
-            except (ValueError, TypeError):
-                df = pd.read_csv(io.StringIO(text))
-            arr = df.iloc[:, :2].apply(pd.to_numeric, errors="coerce").dropna().values
-            return arr if len(arr) > 0 else None
-        except Exception:
-            pass
-    rows = []
-    for line in text.splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        vals = line.replace(",", " ").split()
-        if len(vals) < 2:
-            continue
-        try:
-            x = float(vals[0])
-            y_str = "".join(c for c in vals[1] if c.isdigit() or c in ".+-eE")
-            rows.append([x, float(y_str)])
-        except ValueError:
-            continue
-    return np.array(rows) if rows else None
+    """Compatibility helper for a single text/measurement pattern."""
+    try:
+        patterns = read_patterns(file_bytes, filename)
+    except XRDParseError:
+        return None
+    if not patterns:
+        return None
+    return np.column_stack((patterns[0].x, patterns[0].y))
 
 
 def calc_cif_pattern(cif_bytes: bytes, two_theta_range=(5, 90)):
@@ -395,7 +430,7 @@ def calc_cif_pattern(cif_bytes: bytes, two_theta_range=(5, 90)):
         if not structs:
             return None, None
         calc = XRDCalculator(wavelength="CuKa", symprec=0.01)
-        pat = calc.get_pattern(structs[0], two_theta_range=(5, 90))
+        pat = calc.get_pattern(structs[0], two_theta_range=two_theta_range)
         mask = (pat.x >= two_theta_range[0]) & (pat.x <= two_theta_range[1])
         return pat.x[mask], pat.y[mask]
     except Exception as e:
@@ -505,9 +540,11 @@ def extract_pdf_card_label(pdf_bytes: bytes) -> str | None:
 
 
 def detect_peaks(x, y, prominence=0.1, min_dist_deg=0.5):
-    if len(y) == 0:
-        return np.array([])
-    dx = np.mean(np.diff(x)) if len(x) > 1 else 1.0
+    if len(y) < 3:
+        return np.array([], dtype=int)
+    spacings = np.diff(x)
+    positive_spacings = spacings[spacings > 0]
+    dx = np.mean(positive_spacings) if len(positive_spacings) else 1.0
     dist = max(1, int(min_dist_deg / dx))
     pks, _ = find_peaks(y, prominence=prominence * np.max(y), distance=dist)
     return pks
@@ -546,90 +583,89 @@ def color_picker_popover(key: str, default_hex: str):
 
 
 # ===== セッション保存/復元 =====
-GLOBAL_KEYS = [
-    "normalize", "show_legend", "show_cif_legend", "show_ref_lines", "show_peaks",
-    "peak_prom", "global_offset", "xrange", "major_tick", "show_minor",
-    "minor_tick", "cif_label_side", "cif_label_fontsize",
-    "cif_label_offset_x", "cif_label_offset_y", "show_side_labels",
-    "label_side", "label_fontsize", "label_offset_x", "label_offset_y",
-    "fig_width", "fig_height", "dpi_export", "font_size", "show_panel",
-]
+# Keep conditional widget values when their controls are temporarily hidden.
+# Language is already instantiated above; its value is retained by that widget.
+for _key in list(st.session_state):
+    if _key != "lang_radio" and (_key in GLOBAL_KEYS or PATTERN_KEY.fullmatch(_key)):
+        st.session_state[_key] = st.session_state[_key]
 
 
 def build_session_json(n_xrd: int, n_cif: int, n_pdf: int) -> bytes:
-    settings = {}
-    for k in GLOBAL_KEYS:
-        if k in st.session_state:
-            v = st.session_state[k]
-            settings[k] = list(v) if isinstance(v, tuple) else v
-    for i in range(n_xrd):
-        for pat in ["vis_{}", "ord_{}", "_val_lbl_{}", "xrd_color_{}",
-                    "extra_offset_{}", "yoff_{}"]:
-            k = pat.format(i)
-            if k in st.session_state:
-                settings[k] = st.session_state[k]
-    for i in range(n_cif):
-        for pat in ["cvis_{}", "cord_{}", "_val_clbl_{}", "cif_color_{}", "cref_line_{}"]:
-            k = pat.format(i)
-            if k in st.session_state:
-                settings[k] = st.session_state[k]
-    for i in range(n_pdf):
-        for pat in ["pvis_{}", "pord_{}", "_val_plbl_{}", "pdf_color_{}", "pref_line_{}"]:
-            k = pat.format(i)
-            if k in st.session_state:
-                settings[k] = st.session_state[k]
-    xrd_encoded = {
-        name: base64.b64encode(data).decode()
-        for name, data in st.session_state.get("_xrd_bytes", {}).items()
-    }
-    cif_encoded = {
-        name: base64.b64encode(data).decode()
-        for name, data in st.session_state.get("_cif_bytes", {}).items()
-    }
-    pdf_encoded = {
-        name: base64.b64encode(data).decode()
-        for name, data in st.session_state.get("_pdf_bytes", {}).items()
-    }
-    return json.dumps({
-        "version": 2,
-        "xrd_files": xrd_encoded,
-        "cif_files": cif_encoded,
-        "pdf_files": pdf_encoded,
-        "settings": settings,
-    }, ensure_ascii=False).encode("utf-8")
+    settings = {key: value for key, value in st.session_state.items()
+                if key in GLOBAL_KEYS or PATTERN_KEY.fullmatch(key)}
+    return encode_project(
+        st.session_state.get("_xrd_bytes", {}),
+        st.session_state.get("_cif_bytes", {}),
+        st.session_state.get("_pdf_bytes", {}), settings,
+    )
 
 
 def restore_session(json_bytes: bytes):
-    data = json.loads(json_bytes.decode("utf-8"))
-    st.session_state["_xrd_bytes"] = {
-        name: base64.b64decode(b64)
-        for name, b64 in data.get("xrd_files", {}).items()
-    }
-    st.session_state["_cif_bytes"] = {
-        name: base64.b64decode(b64)
-        for name, b64 in data.get("cif_files", {}).items()
-    }
-    st.session_state["_pdf_bytes"] = {
-        name: base64.b64decode(b64)
-        for name, b64 in data.get("pdf_files", {}).items()
-    }
-    for k, v in data.get("settings", {}).items():
-        if k == "xrange" and isinstance(v, list):
-            v = tuple(v)
-        st.session_state[k] = v
-    n_xrd = len(st.session_state["_xrd_bytes"])
-    n_cif = len(st.session_state["_cif_bytes"])
-    n_pdf = len(st.session_state["_pdf_bytes"])
-    for i in range(n_xrd):
-        vk = f"_ver_lbl_{i}"
-        st.session_state[vk] = st.session_state.get(vk, 0) + 1
-    for i in range(n_cif):
-        vk = f"_ver_clbl_{i}"
-        st.session_state[vk] = st.session_state.get(vk, 0) + 1
-    for i in range(n_pdf):
-        vk = f"_ver_plbl_{i}"
-        st.session_state[vk] = st.session_state.get(vk, 0) + 1
-    st.rerun()
+    # This function is called only from callbacks, before widgets are created.
+    project = decode_project(json_bytes)
+    for key in list(st.session_state):
+        if (key in GLOBAL_KEYS or PATTERN_KEY.fullmatch(key)
+                or re.fullmatch(r"_(?:inp|ver)_(?:lbl|clbl|plbl)_.*", key)):
+            del st.session_state[key]
+    for kind in ("xrd", "cif", "pdf"):
+        st.session_state[f"_{kind}_bytes"] = project[f"{kind}_files"]
+        st.session_state.pop(f"_upload_error_{kind}", None)
+    st.session_state.update(project["settings"])
+    st.session_state["_file_epoch"] = st.session_state.get("_file_epoch", 0) + 1
+    st.session_state["_xrd_pattern_names"] = None
+    st.session_state["_project_loaded"] = True
+    st.session_state.pop("_project_error", None)
+    st.session_state.pop("_autosave_fingerprint", None)
+
+
+def _open_uploaded_project():
+    upload = st.session_state.get("_session_upload")
+    if upload is not None:
+        try:
+            restore_session(upload.getvalue())
+        except (ProjectError, ValueError) as exc:
+            st.session_state["_project_error"] = str(exc)
+
+
+def _open_local_autosave():
+    try:
+        restore_session((LOCAL_DATA_DIR / "autosave.json").read_bytes())
+    except (OSError, ProjectError) as exc:
+        st.session_state["_project_error"] = str(exc)
+
+
+def _new_project():
+    for key in list(st.session_state):
+        if ((key in GLOBAL_KEYS and key != "lang_radio") or PATTERN_KEY.fullmatch(key)
+                or re.fullmatch(r"_(?:inp|ver)_(?:lbl|clbl|plbl)_.*", key)):
+            del st.session_state[key]
+    for kind in ("xrd", "cif", "pdf"):
+        st.session_state[f"_{kind}_bytes"] = {}
+        st.session_state.pop(f"_upload_error_{kind}", None)
+    st.session_state["_file_epoch"] = st.session_state.get("_file_epoch", 0) + 1
+    st.session_state["_xrd_pattern_names"] = None
+    st.session_state.pop("_project_loaded", None)
+    st.session_state.pop("_project_error", None)
+
+
+def _uploaded_files_changed(kind, widget_key):
+    files = st.session_state.get(widget_key) or []
+    names = [file.name for file in files]
+    duplicates = sorted({name for name in names if names.count(name) > 1})
+    if duplicates:
+        st.session_state[f"_upload_error_{kind}"] = ", ".join(duplicates)
+        return
+    st.session_state.pop(f"_upload_error_{kind}", None)
+    # Comparing the reference identities happens later, before their widgets.
+    if kind != "xrd":
+        old = list(st.session_state.get(f"_{kind}_bytes", {}))
+        new = [file.name for file in files]
+        if old != new:
+            templates = (["cvis_{}", "cord_{}", "_val_clbl_{}", "_ver_clbl_{}", "cif_color_{}", "cref_line_{}"]
+                         if kind == "cif" else
+                         ["pvis_{}", "pord_{}", "_val_plbl_{}", "_ver_plbl_{}", "pdf_color_{}", "pref_line_{}"])
+            _remap_file_session_state(old, new, templates)
+    st.session_state[f"_{kind}_bytes"] = {file.name: file.getvalue() for file in files}
 
 
 def _remap_file_session_state(old_names: list, new_names: list, key_tmpls: list):
@@ -652,63 +688,83 @@ def _remap_file_session_state(old_names: list, new_names: list, key_tmpls: list)
                 if val is None:
                     continue
                 new_k = tmpl.format(new_i)
-                st.session_state[new_k] = val
+                st.session_state[new_k] = val + 1 if tmpl.startswith("_ver_") else val
 
 
 # ===== サイドバー =====
 
-st.sidebar.caption("Last updated: 2026-06-20")
+st.sidebar.caption("Last updated: 2026-10-22")
+st.sidebar.header(T["session_header"])
+st.sidebar.caption(T["project_help"])
+session_upload = st.sidebar.file_uploader(
+    T["load_session"], type=["json"], key="_session_upload",
+    on_change=_open_uploaded_project,
+)
+if st.session_state.pop("_project_loaded", False):
+    st.sidebar.success(T["project_loaded"])
+if st.session_state.get("_project_error"):
+    st.sidebar.error(T["project_error"] + st.session_state["_project_error"])
+if LOCAL_DATA_DIR and (LOCAL_DATA_DIR / "autosave.json").is_file() and not any(
+    st.session_state.get(f"_{kind}_bytes") for kind in ("xrd", "cif", "pdf")
+):
+    st.sidebar.button(T["resume_local"], on_click=_open_local_autosave,
+                      use_container_width=True)
+st.sidebar.button(T["new_project"], on_click=_new_project, use_container_width=True)
+autosave_status = st.sidebar.empty()
 
+_file_epoch = st.session_state.get("_file_epoch", 0)
 st.sidebar.header(T["xrd_data_header"])
+st.sidebar.caption(T["native_help"])
+_xrd_upload_key = f"xrd_upload_{_file_epoch}"
 xrd_files = st.sidebar.file_uploader(
-    T["xrd_upload"],
-    type=["xy", "txt", "csv"], accept_multiple_files=True,
+    T["xrd_upload"], type=list(SUPPORTED_EXTENSIONS), accept_multiple_files=True,
+    key=_xrd_upload_key, on_change=_uploaded_files_changed,
+    args=("xrd", _xrd_upload_key),
 )
 st.sidebar.header(T["ref_header"])
+_cif_upload_key = f"cif_upload_{_file_epoch}"
 cif_files = st.sidebar.file_uploader(
     T["cif_upload"], type=["cif"], accept_multiple_files=True,
+    key=_cif_upload_key, on_change=_uploaded_files_changed,
+    args=("cif", _cif_upload_key),
 )
+_pdf_upload_key = f"pdf_upload_{_file_epoch}"
 pdf_ref_files = st.sidebar.file_uploader(
     T["pdf_upload"], type=["pdf"], accept_multiple_files=True,
+    key=_pdf_upload_key, on_change=_uploaded_files_changed,
+    args=("pdf", _pdf_upload_key),
 )
+for _kind in ("xrd", "cif", "pdf"):
+    if st.session_state.get(f"_upload_error_{_kind}"):
+        st.sidebar.error(T["duplicate_names"] + st.session_state[f"_upload_error_{_kind}"])
 
-if xrd_files:
-    _xrd_new = [f.name for f in xrd_files]
-    _xrd_old = list(st.session_state.get("_xrd_bytes", {}).keys())
-    if _xrd_new != _xrd_old:
-        _remap_file_session_state(
-            old_names=_xrd_old, new_names=_xrd_new,
-            key_tmpls=["vis_{}", "ord_{}", "_val_lbl_{}", "_ver_lbl_{}", "xrd_color_{}", "extra_offset_{}", "yoff_{}"],
-        )
-    st.session_state["_xrd_bytes"] = {f.name: f.read() for f in xrd_files}
-    for f in xrd_files:
-        f.seek(0)
-if cif_files:
-    _cif_new = [f.name for f in cif_files]
-    _cif_old = list(st.session_state.get("_cif_bytes", {}).keys())
-    if _cif_new != _cif_old:
-        _remap_file_session_state(
-            old_names=_cif_old, new_names=_cif_new,
-            key_tmpls=["cvis_{}", "cord_{}", "_val_clbl_{}", "_ver_clbl_{}", "cif_color_{}", "cref_line_{}"],
-        )
-    st.session_state["_cif_bytes"] = {f.name: f.read() for f in cif_files}
-    for f in cif_files:
-        f.seek(0)
-if pdf_ref_files:
-    _pdf_new = [f.name for f in pdf_ref_files]
-    _pdf_old = list(st.session_state.get("_pdf_bytes", {}).keys())
-    if _pdf_new != _pdf_old:
-        _remap_file_session_state(
-            old_names=_pdf_old, new_names=_pdf_new,
-            key_tmpls=["pvis_{}", "pord_{}", "_val_plbl_{}", "_ver_plbl_{}", "pdf_color_{}", "pref_line_{}"],
-        )
-    st.session_state["_pdf_bytes"] = {f.name: f.read() for f in pdf_ref_files}
-    for f in pdf_ref_files:
-        f.seek(0)
+active_xrd = []
+for _source_name, _source_bytes in st.session_state.get("_xrd_bytes", {}).items():
+    try:
+        _patterns = read_patterns(_source_bytes, _source_name)
+        for _scan_index, _pattern in enumerate(_patterns):
+            _name = (_source_name if len(_patterns) == 1 else
+                     f"{_source_name} [scan {_scan_index + 1}].xy")
+            active_xrd.append(RestoredFile(
+                _name, _source_bytes, np.column_stack((_pattern.x, _pattern.y)),
+            ))
+    except XRDParseError as _error:
+        st.error(T["read_error"] + f"{_source_name}: {_error}")
 
-active_xrd = [RestoredFile(n, d) for n, d in st.session_state.get("_xrd_bytes", {}).items()]
+_new_pattern_names = [file.name for file in active_xrd]
+_old_pattern_names = st.session_state.get("_xrd_pattern_names")
+if _old_pattern_names is not None and _old_pattern_names != _new_pattern_names:
+    _remap_file_session_state(
+        _old_pattern_names, _new_pattern_names,
+        ["vis_{}", "ord_{}", "_val_lbl_{}", "_ver_lbl_{}", "xrd_color_{}", "extra_offset_{}", "yoff_{}"],
+    )
+st.session_state["_xrd_pattern_names"] = _new_pattern_names
 active_cif = [RestoredFile(n, d) for n, d in st.session_state.get("_cif_bytes", {}).items()]
 active_pdf = [RestoredFile(n, d) for n, d in st.session_state.get("_pdf_bytes", {}).items()]
+if active_xrd:
+    st.sidebar.caption(T["scan_count"].format(
+        files=len(st.session_state.get("_xrd_bytes", {})), scans=len(active_xrd),
+    ))
 
 if active_xrd and not xrd_files:
     st.sidebar.caption(T["restored_xrd"] + ", ".join(f.name for f in active_xrd))
@@ -718,7 +774,14 @@ if active_pdf and not pdf_ref_files:
     st.sidebar.caption(T["restored_pdf"] + ", ".join(f.name for f in active_pdf))
 
 st.sidebar.header(T["graph_settings"])
-xrange         = st.sidebar.slider(T["xrange"], 5.0, 90.0, (10.0, 80.0), step=0.5, key="xrange")
+if active_xrd and st.sidebar.button(T["data_range"], use_container_width=True):
+    _xmin = min(float(file.pattern[:, 0].min()) for file in active_xrd)
+    _xmax = max(float(file.pattern[:, 0].max()) for file in active_xrd)
+    _xmin = max(0., np.floor(_xmin * 2) / 2)
+    _xmax = min(180., np.ceil(_xmax * 2) / 2)
+    if _xmin < _xmax:
+        st.session_state["xrange"] = (float(_xmin), float(_xmax))
+xrange         = st.sidebar.slider(T["xrange"], 0.0, 180.0, (10.0, 80.0), step=0.5, key="xrange")
 x_min, x_max   = xrange
 normalize      = st.sidebar.checkbox(T["normalize_cb"], value=False, key="normalize")
 if "show_legend" not in st.session_state:
@@ -809,7 +872,7 @@ if active_xrd:
 
                     with st.expander(f"**{i+1}. {default_name}**", expanded=True):
                         order = st.number_input(
-                            T["display_order"], value=i + 1, min_value=1, max_value=50,
+                            T["display_order"], value=i + 1, min_value=1, max_value=10000,
                             key=f"ord_{i}",
                         )
                         visible = st.checkbox(T["show_cb"], value=True, key=f"vis_{i}")
@@ -854,7 +917,7 @@ if active_xrd:
 
                         with st.expander(f"**CIF {i+1}. {file_stem}**", expanded=True):
                             order   = st.number_input(
-                                T["display_order"], value=i + 1, min_value=1, max_value=50,
+                                T["display_order"], value=i + 1, min_value=1, max_value=10000,
                                 key=f"cord_{i}",
                             )
                             visible = st.checkbox(T["show_cb"], value=True, key=f"cvis_{i}")
@@ -884,7 +947,7 @@ if active_xrd:
                         with st.expander(f"**PDF {i+1}. {file_stem}**", expanded=True):
                             order   = st.number_input(
                                 T["display_order"], value=len(active_cif) + i + 1,
-                                min_value=1, max_value=50, key=f"pord_{i}",
+                                min_value=1, max_value=10000, key=f"pord_{i}",
                             )
                             visible = st.checkbox(T["show_cb"], value=True, key=f"pvis_{i}")
                             label   = label_input(key=f"plbl_{i}", default=smart_label)
@@ -905,7 +968,7 @@ if active_xrd:
     else:
         for i, f in enumerate(active_xrd):
             key = f"xrd_color_{i}"
-            orders.append(i + 1)
+            orders.append(st.session_state.get(f"ord_{i}", i + 1))
             visibles.append(st.session_state.get(f"vis_{i}", True))
             labels.append(st.session_state.get(f"_val_lbl_{i}", os.path.splitext(f.name)[0]))
             colors_sel.append(st.session_state.get(key, ALL_COLORS[i % len(ALL_COLORS)]))
@@ -915,31 +978,31 @@ if active_xrd:
                     st.session_state[eoff_key] = 0.0
             else:
                 abs_offsets.append(st.session_state.get(f"yoff_{i}", 0.0))
-        sort_idx = list(range(len(active_xrd)))
+        sort_idx = sorted(range(len(active_xrd)), key=lambda i: orders[i])
 
         n_xrd = len(active_xrd)
         if active_cif:
             for i, f in enumerate(active_cif):
                 key = f"cif_color_{i}"
                 fallback = extract_cif_label(f.read()) or os.path.splitext(f.name)[0]
-                cif_orders.append(i + 1)
+                cif_orders.append(st.session_state.get(f"cord_{i}", i + 1))
                 cif_visibles.append(st.session_state.get(f"cvis_{i}", True))
                 cif_labels.append(st.session_state.get(f"_val_clbl_{i}", fallback))
                 cif_colors.append(st.session_state.get(key, ALL_COLORS[(n_xrd + i) % len(ALL_COLORS)]))
                 cif_ref_lines.append(st.session_state.get(f"cref_line_{i}", True))
-            cif_sort_idx = list(range(len(active_cif)))
+            cif_sort_idx = sorted(range(len(active_cif)), key=lambda i: cif_orders[i])
 
         if active_pdf:
             n_offset = n_xrd + len(active_cif)
             for i, f in enumerate(active_pdf):
                 key = f"pdf_color_{i}"
                 fallback = extract_pdf_card_label(f.read()) or os.path.splitext(f.name)[0]
-                pdf_orders.append(len(active_cif) + i + 1)
+                pdf_orders.append(st.session_state.get(f"pord_{i}", len(active_cif) + i + 1))
                 pdf_visibles.append(st.session_state.get(f"pvis_{i}", True))
                 pdf_labels.append(st.session_state.get(f"_val_plbl_{i}", fallback))
                 pdf_colors.append(st.session_state.get(key, ALL_COLORS[(n_offset + i) % len(ALL_COLORS)]))
                 pdf_ref_lines.append(st.session_state.get(f"pref_line_{i}", True))
-            pdf_sort_idx = list(range(len(active_pdf)))
+            pdf_sort_idx = sorted(range(len(active_pdf)), key=lambda i: pdf_orders[i])
 
     # ===== 統合リファレンスリストの構築（CIF + PDF、表示順でソート） =====
     def build_ref_list():
@@ -1011,7 +1074,9 @@ if active_xrd:
             for i in sort_idx:
                 if not visibles[i]:
                     continue
-                data = read_xrd_data(active_xrd[i].read(), active_xrd[i].name)
+                data = active_xrd[i].pattern
+                if data is None:
+                    data = read_xrd_data(active_xrd[i].read(), active_xrd[i].name)
                 if data is None:
                     continue
                 x, y = data[:, 0], data[:, 1]
@@ -1089,7 +1154,7 @@ if active_xrd:
                     x_ref, y_ref = parse_pdf_card(
                         ref["file"].read(), two_theta_range=(x_min, x_max)
                     )
-                if x_ref is None:
+                if x_ref is None or y_ref is None or len(x_ref) == 0 or len(y_ref) == 0:
                     row += 1
                     continue
                 baseline = row * row_height
@@ -1100,9 +1165,10 @@ if active_xrd:
                 ax_ref.vlines(x_ref, baseline, baseline + y_norm,
                               color=ref["color"], linewidth=1.0, label=ref["label"])
                 if show_ref_lines and ref.get("show_line", True):
-                    ax_main.vlines(x_ref, *ax_main.get_ylim(),
-                                   color=ref["color"], linewidth=0.7,
-                                   linestyle="--", alpha=0.4, zorder=0)
+                    for xv in x_ref:
+                        ax_main.axvline(xv, ymin=0, ymax=1,
+                                       color=ref["color"], linewidth=0.7,
+                                       linestyle="--", alpha=0.4, zorder=0)
                 if show_cif_legend:
                     lx = (x_min + cif_label_offset_x) if cif_label_side == "左" \
                          else (x_max - cif_label_offset_x)
@@ -1150,7 +1216,9 @@ if active_xrd:
         for i in sort_idx:
             if not visibles[i]:
                 continue
-            data = read_xrd_data(active_xrd[i].read(), active_xrd[i].name)
+            data = active_xrd[i].pattern
+            if data is None:
+                data = read_xrd_data(active_xrd[i].read(), active_xrd[i].name)
             if data is None:
                 continue
             x, y = data[:, 0], data[:, 1]
@@ -1218,7 +1286,7 @@ if active_xrd:
                     x_ref, y_ref = parse_pdf_card(
                         ref["file"].read(), two_theta_range=(x_min, x_max)
                     )
-                if x_ref is None:
+                if x_ref is None or y_ref is None or len(x_ref) == 0 or len(y_ref) == 0:
                     row += 1
                     continue
                 baseline = row * row_height
@@ -1306,14 +1374,16 @@ if active_xrd:
 
     # ===== 描画 & ダウンロード =====
     with col_graph:
+        interactive_tab, export_tab = st.tabs([T["interactive_preview"], T["export_preview"]])
         pfig = build_plotly_figure()
-        st.caption(T["drag_zoom"])
-        st.plotly_chart(pfig, use_container_width=True, config={
-            "scrollZoom": True,
-            "modeBarButtonsToAdd": ["drawrect"],
-            "modeBarButtonsToRemove": ["lasso2d", "select2d"],
-            "displaylogo": False,
-        })
+        with interactive_tab:
+            st.caption(T["drag_zoom"])
+            st.plotly_chart(pfig, use_container_width=True, config={
+                "scrollZoom": True,
+                "modeBarButtonsToAdd": ["drawrect"],
+                "modeBarButtonsToRemove": ["lasso2d", "select2d"],
+                "displaylogo": False,
+            })
 
         _sl  = bool(show_legend)
         _scl = bool(show_cif_legend)
@@ -1327,6 +1397,12 @@ if active_xrd:
         buf_tiff.seek(0)
         tiff_bytes = buf_tiff.getvalue()
         plt.close(fig)
+
+        with export_tab:
+            st.image(png_bytes, use_column_width=True)
+            st.caption(T["export_preview_caption"].format(
+                width=fig_width, height=fig_height, dpi=dpi_export,
+            ))
 
         st.sidebar.download_button(
             T["save_tiff"].format(dpi=dpi_export),
@@ -1349,16 +1425,38 @@ else:
     if not PDFPLUMBER_AVAILABLE:
         st.warning(T["no_pdfplumber"])
 
-session_upload = st.sidebar.file_uploader(
-    T["load_session"], type=["json"], key="_session_upload"
-)
-if session_upload is not None:
-    restore_session(session_upload.read())
-if active_xrd:
+if any(st.session_state.get(f"_{kind}_bytes") for kind in ("xrd", "cif", "pdf")):
+    try:
+        _project_bytes = build_session_json(len(active_xrd), len(active_cif), len(active_pdf))
+        st.sidebar.download_button(
+            T["save_session"],
+            data=_project_bytes,
+            file_name="xrd_project.json",
+            mime="application/json",
+            use_container_width=True,
+        )
+
+        if LOCAL_DATA_DIR:
+            try:
+                _fingerprint = project_fingerprint(_project_bytes)
+                if _fingerprint != st.session_state.get("_autosave_fingerprint"):
+                    atomic_save(LOCAL_DATA_DIR / "autosave.json", _project_bytes)
+                    st.session_state["_autosave_fingerprint"] = _fingerprint
+                    st.session_state["_autosave_time"] = datetime.now().astimezone().strftime("%H:%M:%S")
+                autosave_status.caption(T["autosaved"].format(time=st.session_state.get("_autosave_time", "")))
+            except (OSError, ProjectError) as _error:
+                autosave_status.warning(T["autosave_error"] + str(_error))
+    except ProjectError as _error:
+        autosave_status.warning(T["project_save_error"] + str(_error))
+
+st.sidebar.divider()
+try:
+    from build_bundle import create_bundle_bytes
     st.sidebar.download_button(
-        T["save_session"],
-        data=build_session_json(len(active_xrd), len(active_cif), len(active_pdf)),
-        file_name="xrd_session.json",
-        mime="application/json",
+        T["download_desktop"], data=create_bundle_bytes(),
+        file_name="XRD-Maker-PC.zip", mime="application/zip",
         use_container_width=True,
     )
+    st.sidebar.caption(T["desktop_help"])
+except (ImportError, FileNotFoundError):
+    pass

@@ -1,0 +1,140 @@
+# XRD Maker PC 版
+
+XRD Maker を PC にダウンロードして、ブラウザーでローカル実行できます。
+**初回セットアップには Python と依存パッケージが必要です。通常の ZIP は Python を含みません。**
+一度セットアップすれば、起動・データ読込・描画・プロジェクトの保存／再開はインターネット接続なしで利用できます。
+Python をインストール済みの PC なら、同じ環境向けの wheelhouse を用意して初回セットアップもオフラインにできます。
+
+## Windows
+
+1. Python 3.12 をインストールします。Python のインストーラーでは「Add Python to PATH」を選択してください。
+2. `XRD-Maker-PC.zip` をすべて展開します。ZIP 内から直接実行しないでください。
+3. `setup_windows.bat` をダブルクリックします。初回はパッケージのダウンロードに数分かかる場合があります。
+4. セットアップ完了後、`launch_windows.bat` をダブルクリックします。ブラウザーが自動で開きます。
+5. 終了するときは、起動時に開いたコマンドプロンプトで **Ctrl+C** を押してください。
+
+## macOS
+
+1. Python 3.12 をインストールします（Python 3.10 以降に対応、検証環境は Python 3.12）。
+2. ZIP をすべて展開し、`setup_mac.command` を開きます。
+3. セットアップ完了後、`launch_mac.command` を開きます。ブラウザーが自動で開きます。
+4. 終了するときは、起動時に開いたターミナルで **Ctrl+C** を押してください。
+
+`.command` を開けない場合は、ターミナルで展開先へ移動し、以下を実行できます。
+
+```sh
+bash setup_mac.command
+bash launch_mac.command
+```
+
+macOS のセキュリティ確認が表示される場合は、ファイルの作成元と内容を確認してから、OS の案内に沿って許可してください。
+
+## Linux
+
+Python 3.10 以降と venv を用意し、展開先で以下を実行します。初回セットアップ時にはインターネットが必要です。
+
+```sh
+bash setup_linux.sh
+bash launch_linux.sh
+```
+
+## 操作の保存・再開
+
+アプリのプロジェクト保存からファイルをダウンロードすると、入力データと描画設定をまとめて持ち運べます。
+再開時は、保存したプロジェクトファイルをアプリに読み込んでください。
+PC 版の自動保存先はアプリのフォルダーとは別です。ZIP の再展開やアプリの更新によって自動保存を上書きしません。
+
+| OS | 既定の保存先 |
+| --- | --- |
+| macOS | `~/Library/Application Support/XRD Maker/` |
+| Windows | `%LOCALAPPDATA%\XRD Maker\` |
+| Linux | `~/.local/share/xrd-maker/`（`XDG_DATA_HOME` 設定時はそちらを使用） |
+
+ローカル自動保存はこのフォルダー内の `autosave.json`、起動ログは `launcher.log` に保存します。
+複数ウィンドウで同じ自動保存先を使うと、最後の保存で上書きされるため、通常は一つのアプリだけを起動してください。
+保存先を分けたい場合は、`launch_linux.sh --data-dir /任意の保存先` のように指定できます（Mac の launch ファイルや Windows の `.bat` も同じ引数を受け付けます）。
+
+ブラウザーのタブを閉じてもローカルサーバーは動き続けます。終了は起動ウィンドウの **Ctrl+C** で行ってください。
+PC 版は `127.0.0.1` のみに接続し、起動時に認証情報を設定する必要はありません。
+起動に失敗した場合は、起動ウィンドウのメッセージと上記フォルダーの `launcher.log` を確認できます。
+
+## 初回セットアップもオフラインにする
+
+Python 本体は別途インストールが必要です。必要なら Python のオフラインインストーラーも事前に用意してください。
+パッケージは、**対象 PC と同じ OS・CPU アーキテクチャ・Python バージョン**のオンライン環境で取得します。
+Mac で取得した wheelhouse は Windows には使えません。
+
+```sh
+python -m pip download --only-binary=:all: -r requirements.txt --dest wheelhouse
+```
+
+生成された `wheelhouse` フォルダーを、展開した XRD Maker のフォルダーへコピーします。
+その状態で setup ファイルを起動すると、自動的に wheelhouse だけからインストールします。オンライン取得に切り替わることはありません。
+明示的なオフライン実行も可能です。
+
+```sh
+python setup_local.py --offline --wheelhouse ./wheelhouse
+```
+
+環境に合う wheel や依存パッケージが不足している場合、セットアップはエラーで停止します。
+オンライン環境で不足を補い、対象 PC に wheelhouse をコピーし直してください。
+`pip download` が失敗した場合も、その wheelhouse は未完成なので配布しないでください。
+
+## 開発者向け：配布 ZIP の作成
+
+```sh
+python build_bundle.py --output dist/XRD-Maker-PC.zip
+python build_bundle.py --wheelhouse ./wheelhouse --output dist/XRD-Maker-PC-with-wheels.zip
+```
+
+配布用ファイルを明示的に選んで ZIP にまとめます。`.git`、`.venv`、Streamlit の秘密情報、ユーザーデータ、キャッシュは含めません。
+ZIP の `BUNDLE_MANIFEST.json` には、含まれるソースファイルと SHA-256 を記録します。
+wheelhouse を添付した配布物は、それを作成した OS・CPU・Python の組合せ専用です。
+Python を同梱する `.exe` / `.app` 形式はこの配布物には含みません。
+
+通常起動は `desktop.py` から行います。起動中に pip を実行したり、外部サービスへデータを送ったりする処理はありません。
+描画用サーバーをこの PC のみに公開し、Streamlit の利用状況送信を無効にして起動します。
+Windows の起動スクリプトは同梱していますが、実機での確認は macOS 環境とは別途必要です。
+
+## 測定データの対応形式
+
+| 装置・形式 | 対応内容 |
+| --- | --- |
+| Rigaku `.ras` | 2θ のテキスト測定データ。複数スキャンを個別に表示 |
+| Rigaku `.rasx` | Profile と測定条件を含む標準の1次元測定アーカイブ |
+| Rigaku `.dat` | `*TYPE`・`*GROUP_COUNT`・`*BEGIN` などのヘッダーを持つ形式 |
+| Bruker `.raw` | 標準粉末測定の RAW v1・v3（RAW1.01）・v4（RAW4.00）、4バイトの強度レコード |
+| Bruker `.uxd` | 角度＋強度、または開始角・ステップ幅＋強度の形式 |
+| Bruker `.brml` | 2θ と強度カウンターを識別できる1次元測定アーカイブ |
+| `.xy`・`.txt`・`.csv`・`.dat` | 角度と強度の2列を含むテキスト。3列目があっても強度には使用しません |
+
+`.raw` の拡張子だけでは形式を判定できないため、ファイル内の識別情報を確認します。
+**RAW v2、形式が不明な Rigaku バイナリー RAW、ロッキングカーブ、面検出器の画像、追加の点ごとのチャンネルがある一部の RAW は対象外です。**
+これらは装置ソフトで RAS/RASX、UXD/BRML、または角度＋強度の XY/CSV に書き出してください。
+不明な角度軸や数値列を推測して描画することはありません。
+
+読み込んだ強度は元データの値を保持します。時間による換算・吸収補正は自動では行いません。
+正規化は画面のチェックボックスで選択できます。複数スキャンを含む測定ファイルは、各スキャンを別のパターンとして設定できます。
+低角・高角を含むデータは「測定データの全範囲を表示」で表示範囲に合わせられます（0〜180°）。
+
+## 保存ファイルについて
+
+「作業を保存・ダウンロード」で `xrd_project.json` を保存します。元の装置ファイル、CIF/PDFリファレンス、各スキャンの表示順、表示／非表示、ラベル、色、オフセット、図のサイズなどを含みます。
+再開するときは、上部の「保存した作業を開く」でこの JSON を選択します。元の測定ファイルを再選択する必要はありません。
+旧版の `xrd_session.json`（version 2）も読み込めます。
+
+PC版は操作が確定するたびに `autosave.json` を更新します。再起動後、「前回の自動保存から再開」を押すと続きから作業できます。
+別の作業を残したい場合は JSON を別名で保存してください。Web版では保存ボタンでファイルをダウンロードしてから終了してください。
+保存可能な元データの合計は140 MiB、JSONは190 MiBまでです。上限や保存エラーがある場合はメッセージを表示し、直前の自動保存を保持します。
+同名ファイルを一度に選んだ場合も、上書きせずファイル名の変更を案内します。
+
+## 読み込みの検証
+
+既知のレイアウトを使う自動テストに加えて、公開実測ファイルを確認しました。実機ごとのすべての出力設定を検証したものではありません。
+
+- NIMS の Rigaku RAS（3501点）: https://github.com/nims-mdpf/M-DaC_XRD/blob/master/source/XRD_RIGAKU.ras
+- FAIRmat の RASX（2726点）と BRML（2001点）: https://github.com/FAIRmat-NFDI/readers-xrd/tree/main/tests/data
+- xylib の RAW v3 / UXD: https://github.com/wojdyr/xylib/tree/master/samples 。BT86 の2374点の強度が全点一致し、角度差はUXDの表示丸めに対応する0.005°以内です。
+- Zenodo の RAW v4 と同じ測定の XY: https://zenodo.org/records/17227355 。Tumba の1438点の強度が全点一致し、角度差は0.00005°以内です。
+
+RAW v1 と従来の Rigaku DAT は既知のレイアウトを使う合成データで検証しています。

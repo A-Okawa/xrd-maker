@@ -20,9 +20,22 @@ from pathlib import Path
 
 from project_io import (
     GLOBAL_KEYS, PATTERN_KEY, ProjectError, encode_project, decode_project,
-    atomic_save, project_fingerprint,
+    atomic_save, project_fingerprint, clean_settings,
 )
 from xrd_io import read_patterns, XRDParseError, SUPPORTED_EXTENSIONS
+from figure_style import (
+    STYLE_DEFAULTS, STYLE_KEYS, FIGURE_PRESETS_MM, mm_to_inches, inches_to_mm,
+    font_rcparams, apply_mpl_style, export_figure, resolve_font,
+    validate_style_settings,
+)
+from style_templates import encode_style_template, decode_style_template
+from plot_annotations import (
+    PreparedCurve, ReferencePeaks, match_reference_peaks,
+    add_mpl_phase_annotations, add_plotly_phase_annotations,
+    add_mpl_reference_hkl_labels, add_plotly_reference_hkl_labels,
+    add_mpl_zoom_inset, add_plotly_zoom_inset,
+    format_hkl_groups,
+)
 
 LOCAL_MODE = os.environ.get("XRD_MAKER_LOCAL") == "1"
 LOCAL_DATA_DIR = (Path(os.environ["XRD_MAKER_DATA_DIR"]).expanduser()
@@ -47,7 +60,7 @@ TRANSLATIONS = {
         "password_prompt": "パスワードを入力してください",
         "login": "ログイン",
         "wrong_password": "パスワードが違います",
-        "app_caption": "複数パターン重ね合わせ・CIF/PDFカード リファレンス・論文用TIFF出力",
+        "app_caption": "複数パターン重ね合わせ・CIF/PDFカード リファレンス・論文用 PDF / SVG / TIFF 出力",
         "color_red": "赤系",
         "color_orange": "橙・黄系",
         "color_green": "緑系",
@@ -136,9 +149,9 @@ TRANSLATIONS = {
         "drag_zoom": "ドラッグで範囲ズーム ／ ダブルクリックでリセット",
         "interactive_preview": "インタラクティブ",
         "export_preview": "保存画像のプレビュー",
-        "export_preview_caption": "図サイズ: {width:g} × {height:g} inch · TIFF: {dpi} DPI（プレビューは150 DPI）",
+        "export_preview_caption": "図サイズ: {width:.1f} × {height:.1f} mm · PNG / TIFF: {dpi} DPI（プレビューは150 DPI）",
         "save_tiff": "📥 TIFF として保存 ({dpi} DPI)",
-        "save_png": "📥 PNG として保存（確認用）",
+        "save_png": "📥 PNG として保存 ({dpi} DPI)",
         "upload_prompt": "XRDデータを選択するか、保存した作業ファイル（.json）を開いてください。",
         "no_pymatgen": "pymatgen が未インストールのため CIF リファレンス機能は無効です。",
         "no_pdfplumber": "pdfplumber が未インストールのため PDFカード リファレンス機能は無効です。",
@@ -149,7 +162,7 @@ TRANSLATIONS = {
         "password_prompt": "Enter password",
         "login": "Login",
         "wrong_password": "Incorrect password",
-        "app_caption": "Multi-pattern overlay · CIF/PDF card reference · Publication-quality TIFF export",
+        "app_caption": "Multi-pattern overlay · CIF/PDF card reference · Publication-quality PDF / SVG / TIFF export",
         "color_red": "Reds",
         "color_orange": "Orange/Yellow",
         "color_green": "Greens",
@@ -238,9 +251,9 @@ TRANSLATIONS = {
         "drag_zoom": "Drag to zoom / Double-click to reset",
         "interactive_preview": "Interactive",
         "export_preview": "Export preview",
-        "export_preview_caption": "Figure size: {width:g} × {height:g} inch · TIFF: {dpi} DPI (preview: 150 DPI)",
+        "export_preview_caption": "Figure size: {width:.1f} × {height:.1f} mm · PNG / TIFF: {dpi} DPI (preview: 150 DPI)",
         "save_tiff": "📥 Save as TIFF ({dpi} DPI)",
-        "save_png": "📥 Save as PNG (for preview)",
+        "save_png": "📥 Save as PNG ({dpi} DPI)",
         "upload_prompt": "Choose XRD measurements or open a saved project (.json) to continue.",
         "no_pymatgen": "CIF reference is disabled (pymatgen not installed).",
         "no_pdfplumber": "PDF card reference is disabled (pdfplumber not installed).",
@@ -314,6 +327,18 @@ _lang_option = st.sidebar.radio(
 )
 _lang_code = "en" if _lang_option == "English" else "ja"
 T = TRANSLATIONS[_lang_code]
+
+
+def ui(ja, en):
+    return en if _lang_code == "en" else ja
+
+
+def _widget_default(key, default, checkbox=False, number=False):
+    # A restored value has one owner: session state. Passing a second widget
+    # default causes Streamlit's duplicate-default warning after project loads.
+    if st.session_state.get(key) is None:
+        st.session_state[key] = default
+    return False if checkbox else "min" if number else None
 
 # 言語付き色ファミリー名
 COLOR_FAMILIES = OrderedDict(
@@ -418,9 +443,10 @@ def read_xrd_data(file_bytes: bytes, filename: str = ""):
     return np.column_stack((patterns[0].x, patterns[0].y))
 
 
-def calc_cif_pattern(cif_bytes: bytes, two_theta_range=(5, 90)):
+@st.cache_data(show_spinner=False)
+def calc_cif_details(cif_bytes: bytes, two_theta_range=(5, 90)):
     if not PYMATGEN_AVAILABLE:
-        return None, None
+        return None, None, []
     with tempfile.NamedTemporaryFile(suffix=".cif", delete=False) as tmp:
         tmp.write(cif_bytes)
         tmp_path = tmp.name
@@ -428,16 +454,25 @@ def calc_cif_pattern(cif_bytes: bytes, two_theta_range=(5, 90)):
         parser = CifParser(tmp_path)
         structs = parser.parse_structures(primitive=False)
         if not structs:
-            return None, None
+            return None, None, []
         calc = XRDCalculator(wavelength="CuKa", symprec=0.01)
         pat = calc.get_pattern(structs[0], two_theta_range=two_theta_range)
         mask = (pat.x >= two_theta_range[0]) & (pat.x <= two_theta_range[1])
-        return pat.x[mask], pat.y[mask]
+        hkls = []
+        for selected, families in zip(mask, pat.hkls):
+            if selected:
+                hkls.append(format_hkl_groups(families))
+        return pat.x[mask], pat.y[mask], hkls
     except Exception as e:
         st.warning(T["cif_error"] + str(e))
-        return None, None
+        return None, None, []
     finally:
         os.unlink(tmp_path)
+
+
+def calc_cif_pattern(cif_bytes: bytes, two_theta_range=(5, 90)):
+    x, y, _ = calc_cif_details(cif_bytes, two_theta_range)
+    return x, y
 
 
 def parse_pdf_card(pdf_bytes: bytes, two_theta_range=(5, 90)):
@@ -634,6 +669,44 @@ def _open_local_autosave():
         st.session_state["_project_error"] = str(exc)
 
 
+def _open_style_template():
+    upload = st.session_state.get("_style_upload")
+    if upload is None:
+        return
+    try:
+        settings = decode_style_template(upload.getvalue())
+        clean_settings({**{key: st.session_state[key] for key in STYLE_KEYS if key in st.session_state}, **settings})
+        st.session_state.update(settings)
+        st.session_state.pop("_size_signature", None)
+        st.session_state["_style_loaded"] = True
+        st.session_state.pop("_style_error", None)
+    except (ProjectError, ValueError) as exc:
+        st.session_state["_style_error"] = str(exc)
+
+
+def _apply_figure_preset():
+    preset = FIGURE_PRESETS_MM.get(st.session_state["figure_preset"])
+    if preset:
+        st.session_state["fig_width"], st.session_state["fig_height"] = map(mm_to_inches, preset)
+        compact = st.session_state["figure_preset"] == "single"
+        st.session_state.update(font_size=9 if compact else 11,
+            label_fontsize=8 if compact else 10, cif_label_fontsize=7 if compact else 8,
+            annotation_font_size=6 if compact else 7,
+            margin_left=.16 if compact else .12, margin_bottom=.22 if compact else .15)
+    st.session_state.pop("_size_signature", None)
+
+
+def _update_figure_dimension(axis):
+    value = st.session_state[f"_figure_{axis}"]
+    st.session_state[f"fig_{axis}"] = mm_to_inches(value) if st.session_state["size_unit"] == "mm" else value
+    st.session_state["figure_preset"] = "custom"
+
+
+def _update_margin(key):
+    value = st.session_state[f"_percent_{key}"] / 100
+    st.session_state[key] = 1 - value if key in ("margin_right", "margin_top") else value
+
+
 def _new_project():
     for key in list(st.session_state):
         if ((key in GLOBAL_KEYS and key != "lang_radio") or PATTERN_KEY.fullmatch(key)
@@ -693,7 +766,7 @@ def _remap_file_session_state(old_names: list, new_names: list, key_tmpls: list)
 
 # ===== サイドバー =====
 
-st.sidebar.caption("Last updated: 2026-10-22")
+st.sidebar.caption("Last updated: 2026-10-23")
 st.sidebar.header(T["session_header"])
 st.sidebar.caption(T["project_help"])
 session_upload = st.sidebar.file_uploader(
@@ -781,26 +854,26 @@ if active_xrd and st.sidebar.button(T["data_range"], use_container_width=True):
     _xmax = min(180., np.ceil(_xmax * 2) / 2)
     if _xmin < _xmax:
         st.session_state["xrange"] = (float(_xmin), float(_xmax))
-xrange         = st.sidebar.slider(T["xrange"], 0.0, 180.0, (10.0, 80.0), step=0.5, key="xrange")
+xrange         = st.sidebar.slider(T["xrange"], 0.0, 180.0, _widget_default('xrange', (10.0, 80.0)), step=0.5, key="xrange")
 x_min, x_max   = xrange
-normalize      = st.sidebar.checkbox(T["normalize_cb"], value=False, key="normalize")
+normalize      = st.sidebar.checkbox(T["normalize_cb"], value=_widget_default('normalize', False, checkbox=True), key="normalize")
 if "show_legend" not in st.session_state:
     st.session_state["show_legend"] = True
 show_legend    = st.sidebar.checkbox(T["show_legend_cb"], key="show_legend")
 if "show_cif_legend" not in st.session_state:
     st.session_state["show_cif_legend"] = True
 show_cif_legend= st.sidebar.checkbox(T["show_cif_legend_cb"], key="show_cif_legend")
-show_ref_lines = st.sidebar.checkbox(T["show_ref_lines_cb"], value=False, key="show_ref_lines")
-show_peaks     = st.sidebar.checkbox(T["show_peaks_cb"], value=False, key="show_peaks")
-peak_prom      = st.sidebar.slider(T["peak_sensitivity"], 0.01, 0.5, 0.1, step=0.01, key="peak_prom") if show_peaks else 0.1
-global_offset  = st.sidebar.slider(T["offset_multiplier"], 0.0, 3.0, 1.0, step=0.05, key="global_offset") if normalize else None
+show_ref_lines = st.sidebar.checkbox(T["show_ref_lines_cb"], value=_widget_default('show_ref_lines', False, checkbox=True), key="show_ref_lines")
+show_peaks     = st.sidebar.checkbox(T["show_peaks_cb"], value=_widget_default('show_peaks', False, checkbox=True), key="show_peaks")
+peak_prom      = st.sidebar.slider(T["peak_sensitivity"], 0.01, 0.5, _widget_default('peak_prom', 0.1), step=0.01, key="peak_prom") if show_peaks else 0.1
+global_offset  = st.sidebar.slider(T["offset_multiplier"], 0.0, 3.0, _widget_default('global_offset', 1.0), step=0.05, key="global_offset") if normalize else None
 
 st.sidebar.subheader(T["tick_settings"])
 major_tick  = st.sidebar.number_input(T["major_tick"], min_value=1.0, max_value=30.0,
-                                       value=10.0, step=1.0, key="major_tick")
-show_minor  = st.sidebar.checkbox(T["show_minor_cb"], value=True, key="show_minor")
+                                       value=_widget_default('major_tick', 10.0, number=True), step=1.0, key="major_tick")
+show_minor  = st.sidebar.checkbox(T["show_minor_cb"], value=_widget_default('show_minor', True, checkbox=True), key="show_minor")
 minor_tick  = st.sidebar.number_input(T["minor_tick"], min_value=0.5, max_value=10.0,
-                                       value=2.0, step=0.5, key="minor_tick") if show_minor else None
+                                       value=_widget_default('minor_tick', 2.0, number=True), step=0.5, key="minor_tick") if show_minor else None
 
 # 左/右 の内部値は言語に関わらず固定し、format_func で表示を翻訳する
 _LR_OPTIONS = ["左", "右"]
@@ -811,41 +884,110 @@ if show_cif_legend:
     cif_label_side     = st.sidebar.radio(T["icdd_label_pos"], _LR_OPTIONS,
                                            format_func=_lr_fmt, horizontal=True,
                                            key="cif_label_side")
-    cif_label_fontsize = st.sidebar.slider(T["icdd_label_fontsize"], 5, 20, 9, key="cif_label_fontsize")
-    cif_label_offset_x = st.sidebar.slider(T["icdd_offset_x"], 0.0, 10.0, 0.5, step=0.1,
+    cif_label_fontsize = st.sidebar.slider(T["icdd_label_fontsize"], 5, 20, _widget_default('cif_label_fontsize', 9), key="cif_label_fontsize")
+    cif_label_offset_x = st.sidebar.slider(T["icdd_offset_x"], 0.0, 10.0, _widget_default('cif_label_offset_x', 0.5), step=0.1,
                                             help=T["icdd_offset_x_help"], key="cif_label_offset_x")
-    cif_label_offset_y = st.sidebar.slider(T["icdd_offset_y"], 0.0, 1.0, 0.5, step=0.05,
+    cif_label_offset_y = st.sidebar.slider(T["icdd_offset_y"], 0.0, 1.0, _widget_default('cif_label_offset_y', 0.5), step=0.05,
                                             help=T["icdd_offset_y_help"], key="cif_label_offset_y")
 else:
     cif_label_side, cif_label_fontsize = "左", 9
     cif_label_offset_x, cif_label_offset_y = 0.5, 0.5
 
 st.sidebar.subheader(T["sample_labels"])
-show_side_labels = st.sidebar.checkbox(T["show_side_labels_cb"], value=False, key="show_side_labels")
+show_side_labels = st.sidebar.checkbox(T["show_side_labels_cb"], value=_widget_default('show_side_labels', False, checkbox=True), key="show_side_labels")
 if show_side_labels:
     label_side      = st.sidebar.radio(T["label_pos"], _LR_OPTIONS,
                                         format_func=_lr_fmt, horizontal=True,
                                         key="label_side")
-    label_fontsize  = st.sidebar.slider(T["label_fontsize"], 5, 24, 11, key="label_fontsize")
-    label_offset_x  = st.sidebar.slider(T["label_offset_x"], -5.0, 5.0, 0.5, step=0.1,
+    label_fontsize  = st.sidebar.slider(T["label_fontsize"], 5, 24, _widget_default('label_fontsize', 11), key="label_fontsize")
+    label_offset_x  = st.sidebar.slider(T["label_offset_x"], -5.0, 5.0, _widget_default('label_offset_x', 0.5), step=0.1,
                                          help=T["label_offset_x_help"], key="label_offset_x")
-    label_offset_y  = st.sidebar.slider(T["label_offset_y"], -0.3, 1.0, 0.05, step=0.01,
+    label_offset_y  = st.sidebar.slider(T["label_offset_y"], -0.3, 1.0, _widget_default('label_offset_y', 0.05), step=0.01,
                                          help=T["label_offset_y_help"], key="label_offset_y")
 else:
     label_side, label_fontsize, label_offset_x, label_offset_y = "右", 11, 0.5, 0.05
 
 st.sidebar.header(T["fig_size"])
-fig_width  = st.sidebar.slider(T["fig_width"], 6.0, 20.0, 10.0, step=0.5, key="fig_width")
-fig_height = st.sidebar.slider(T["fig_height"], 4.0, 20.0, 8.0, step=0.5, key="fig_height")
+for _key, _value in STYLE_DEFAULTS.items():
+    st.session_state.setdefault(_key, _value)
+st.session_state.setdefault("fig_width", 10.0)
+st.session_state.setdefault("fig_height", 8.0)
+st.sidebar.selectbox(ui("論文図のひな形", "Publication figure preset"), list(FIGURE_PRESETS_MM),
+    format_func=lambda key: {"custom": ui("自由指定", "Custom"),
+        "single": ui("1段幅の例 · 85 × 70 mm", "Single column example · 85 × 70 mm"),
+        "double": ui("2段幅の例 · 180 × 120 mm", "Double column example · 180 × 120 mm")}[key],
+    key="figure_preset", on_change=_apply_figure_preset)
+st.sidebar.caption(ui("ひな形は寸法・文字サイズ・下と左の余白を設定します。投稿先の指定に合わせて調整してください。", "Presets set dimensions, font sizes, and bottom/left margins. Adjust them to your journal's requirements."))
+size_unit = st.sidebar.radio(ui("寸法の単位", "Size unit"), ["mm", "inch"], horizontal=True, key="size_unit")
+_signature = (size_unit, st.session_state["fig_width"], st.session_state["fig_height"])
+if st.session_state.get("_size_signature") != _signature:
+    for _axis in ("width", "height"):
+        _value = st.session_state[f"fig_{_axis}"]
+        st.session_state[f"_figure_{_axis}"] = inches_to_mm(_value) if size_unit == "mm" else _value
+    st.session_state["_size_signature"] = _signature
+for _axis, _label in (("width", ui("図の幅", "Figure width")), ("height", ui("図の高さ", "Figure height"))):
+    st.sidebar.number_input(f"{_label} ({size_unit})", min_value=25.0 if size_unit == "mm" else 25 / 25.4,
+        max_value=508.0 if size_unit == "mm" else 20.0, step=1.0 if size_unit == "mm" else 0.1,
+        format="%.2f", key=f"_figure_{_axis}", on_change=_update_figure_dimension, args=(_axis,))
+fig_width, fig_height = st.session_state["fig_width"], st.session_state["fig_height"]
 dpi_export = st.sidebar.selectbox("Output DPI", [300, 600], index=0, key="dpi_export")
-font_size  = st.sidebar.slider(T["font_size"], 8, 20, 14, key="font_size")
+font_size  = st.sidebar.slider(T["font_size"], 6, 28, _widget_default('font_size', 14), key="font_size")
+with st.sidebar.expander(ui("線・フォント・余白", "Lines, fonts and margins")):
+    st.selectbox(ui("フォント", "Font family"), ["Arial", "DejaVu Sans", "Times New Roman"], key="font_family")
+    _actual_font = resolve_font(st.session_state["font_family"])
+    if _actual_font != st.session_state["font_family"]:
+        st.caption(ui(f"この環境では {_actual_font} を使用します。", f"This environment uses {_actual_font}."))
+    for _key, _label in (("line_width", ui("測定曲線の線幅 (pt)", "Pattern line width (pt)")),
+                        ("reference_line_width", ui("リファレンスの線幅 (pt)", "Reference line width (pt)")),
+                        ("axes_line_width", ui("軸・目盛りの線幅 (pt)", "Axes and tick width (pt)"))):
+        st.number_input(_label, .1, 5., step=.1, key=_key)
+    for _key, _label in (("margin_left", ui("左余白 (%)", "Left margin (%)")),
+                        ("margin_right", ui("右余白 (%)", "Right margin (%)")),
+                        ("margin_bottom", ui("下余白 (%)", "Bottom margin (%)")),
+                        ("margin_top", ui("上余白 (%)", "Top margin (%)"))):
+        _fraction = st.session_state[_key]
+        st.session_state[f"_percent_{_key}"] = round(100 * (1 - _fraction if _key in ("margin_right", "margin_top") else _fraction), 8)
+        st.number_input(_label, 0., 100., step=1., key=f"_percent_{_key}", on_change=_update_margin, args=(_key,))
+    st.checkbox(ui("背景を透明にする", "Transparent background"), key="transparent_background")
+    st.checkbox(ui("SVGの文字を編集可能にする", "Keep SVG text editable"), key="svg_text_editable")
+    st.caption(ui("編集可能なSVGの表示には、開くPCにも使用フォントが必要です。", "Editable SVG text uses fonts installed on the computer opening it."))
+plot_style = {key: st.session_state[key] for key in STYLE_KEYS}
+try:
+    plot_style = validate_style_settings(plot_style, fill_defaults=True)
+except ValueError as _error:
+    st.sidebar.error(ui("余白の合計が100%未満になるよう調整してください。", "Adjust opposing margins so their sum is below 100%."))
+    st.stop()
+
+with st.sidebar.expander(ui("作図スタイルの保存・読み込み", "Save and load figure styles")):
+    st.caption(ui("寸法・線・フォント・ラベル位置を再利用できます。測定データや試料名は含みません。", "Reuse dimensions, lines, fonts and label positions. Styles do not include measurements or sample names."))
+    st.file_uploader(ui("スタイルを開く (.json)", "Open figure style (.json)"), type=["json"], key="_style_upload", on_change=_open_style_template)
+    if st.session_state.pop("_style_loaded", False):
+        st.success(ui("作図スタイルを読み込みました。", "Figure style loaded."))
+    if st.session_state.get("_style_error"):
+        st.error(st.session_state["_style_error"])
+    st.download_button(ui("スタイルを保存 (.json)", "Save figure style (.json)"),
+        encode_style_template(dict(st.session_state)), file_name="xrd_figure_style.json", mime="application/json", use_container_width=True)
+
+with st.sidebar.expander(ui("ピーク注記・拡大図", "Peak annotations and zoom inset")):
+    show_phase_markers = st.checkbox(ui("リファレンスと近い実測ピークに記号", "Mark measured peaks near references"), key="show_phase_markers")
+    phase_tolerance = st.number_input(ui("照合の許容差 (°)", "Matching tolerance (°)"), .01, 1., value=_widget_default('phase_tolerance', .1, number=True), step=.01, key="phase_tolerance")
+    st.caption(ui("表示中のリファレンスと実測の極大位置を照合します。記号の一致は相の同定を意味しません。", "Matches visible references to measured local maxima. Matching markers do not identify phases."))
+    show_hkl = st.checkbox(ui("CIFリファレンスにhklを表示", "Show hkl on CIF references"), key="show_hkl")
+    st.caption(ui("CIFはCu Kαで計算します。hklは強いピークを優先して最大12個表示します。", "CIF patterns use Cu Kα. Up to 12 strongest hkl labels are shown."))
+    annotation_font_size = st.slider(ui("注記の文字サイズ", "Annotation font size"), 5, 16, _widget_default('annotation_font_size', 8), key="annotation_font_size")
+    show_zoom = st.checkbox(ui("拡大図を表示", "Show zoom inset"), key="show_zoom")
+    zoom_range = st.slider(ui("拡大する2θ範囲 (°)", "Inset 2θ range (°)"), 0., 180., _widget_default('zoom_range', (25., 35.)), step=.1, key="zoom_range")
+    zoom_location = st.selectbox(ui("拡大図の位置", "Inset position"), ["upper left", "upper right", "lower left", "lower right"],
+        format_func=lambda value: {"upper left": ui("左上", "Upper left"), "upper right": ui("右上", "Upper right"), "lower left": ui("左下", "Lower left"), "lower right": ui("右下", "Lower right")}[value], key="zoom_location")
+    if show_zoom and not x_min <= zoom_range[0] < zoom_range[1] <= x_max:
+        st.info(ui("拡大範囲をメイン図の2θ範囲内に設定してください。", "Set the inset range within the main 2θ range."))
 
 st.sidebar.divider()
 
 
 # ===== メインエリア =====
 
-show_panel = st.toggle(T["show_panel"], value=True, key="show_panel")
+show_panel = st.toggle(T["show_panel"], value=_widget_default('show_panel', True, checkbox=True), key="show_panel")
 
 if active_xrd:
     if show_panel:
@@ -872,10 +1014,10 @@ if active_xrd:
 
                     with st.expander(f"**{i+1}. {default_name}**", expanded=True):
                         order = st.number_input(
-                            T["display_order"], value=i + 1, min_value=1, max_value=10000,
+                            T["display_order"], value=_widget_default(f'ord_{i}', i + 1, number=True), min_value=1, max_value=10000,
                             key=f"ord_{i}",
                         )
-                        visible = st.checkbox(T["show_cb"], value=True, key=f"vis_{i}")
+                        visible = st.checkbox(T["show_cb"], value=_widget_default(f'vis_{i}', True, checkbox=True), key=f"vis_{i}")
                         label   = label_input(key=f"lbl_{i}", default=default_name)
                         chosen_color = color_picker_popover(f"xrd_color_{i}", default_hex)
 
@@ -891,7 +1033,7 @@ if active_xrd:
                             )
                         else:
                             yoff = st.number_input(
-                                T["y_position"], value=0.0, step=100.0,
+                                T["y_position"], value=_widget_default(f'yoff_{i}', 0.0, number=True), step=100.0,
                                 format="%.1f", key=f"yoff_{i}",
                             )
                             abs_offsets.append(yoff)
@@ -917,14 +1059,14 @@ if active_xrd:
 
                         with st.expander(f"**CIF {i+1}. {file_stem}**", expanded=True):
                             order   = st.number_input(
-                                T["display_order"], value=i + 1, min_value=1, max_value=10000,
+                                T["display_order"], value=_widget_default(f'cord_{i}', i + 1, number=True), min_value=1, max_value=10000,
                                 key=f"cord_{i}",
                             )
-                            visible = st.checkbox(T["show_cb"], value=True, key=f"cvis_{i}")
+                            visible = st.checkbox(T["show_cb"], value=_widget_default(f'cvis_{i}', True, checkbox=True), key=f"cvis_{i}")
                             label   = label_input(key=f"clbl_{i}", default=smart_label)
                             chosen_color = color_picker_popover(f"cif_color_{i}", default_hex)
                             if show_ref_lines:
-                                ref_line = st.checkbox(T["show_ref_line_each"], value=True, key=f"cref_line_{i}")
+                                ref_line = st.checkbox(T["show_ref_line_each"], value=_widget_default(f'cref_line_{i}', True, checkbox=True), key=f"cref_line_{i}")
                             else:
                                 ref_line = st.session_state.get(f"cref_line_{i}", True)
 
@@ -946,14 +1088,14 @@ if active_xrd:
 
                         with st.expander(f"**PDF {i+1}. {file_stem}**", expanded=True):
                             order   = st.number_input(
-                                T["display_order"], value=len(active_cif) + i + 1,
+                                T["display_order"], value=_widget_default(f'pord_{i}', len(active_cif) + i + 1, number=True),
                                 min_value=1, max_value=10000, key=f"pord_{i}",
                             )
-                            visible = st.checkbox(T["show_cb"], value=True, key=f"pvis_{i}")
+                            visible = st.checkbox(T["show_cb"], value=_widget_default(f'pvis_{i}', True, checkbox=True), key=f"pvis_{i}")
                             label   = label_input(key=f"plbl_{i}", default=smart_label)
                             chosen_color = color_picker_popover(f"pdf_color_{i}", default_hex)
                             if show_ref_lines:
-                                ref_line = st.checkbox(T["show_ref_line_each"], value=True, key=f"pref_line_{i}")
+                                ref_line = st.checkbox(T["show_ref_line_each"], value=_widget_default(f'pref_line_{i}', True, checkbox=True), key=f"pref_line_{i}")
                             else:
                                 ref_line = st.session_state.get(f"pref_line_{i}", True)
 
@@ -1033,6 +1175,21 @@ if active_xrd:
         return refs
 
     # ===== 図の生成 =====
+    def reference_data(ref):
+        raw = ref["file"].read()
+        if ref["type"] == "cif":
+            x_ref, y_ref = calc_cif_pattern(raw, two_theta_range=(x_min, x_max))
+            hkls = None
+            if show_hkl:
+                detail_x, _, detail_hkl = calc_cif_details(raw, two_theta_range=(x_min, x_max))
+                if detail_x is not None and x_ref is not None and np.array_equal(detail_x, x_ref):
+                    hkls = detail_hkl
+        else:
+            x_ref, y_ref = parse_pdf_card(raw, two_theta_range=(x_min, x_max))
+            hkls = None
+        return x_ref, y_ref, hkls
+
+    @plt.rc_context()
     def build_figure(show_legend=show_legend, show_cif_legend=show_cif_legend):
         from matplotlib.ticker import MultipleLocator
 
@@ -1040,18 +1197,12 @@ if active_xrd:
         has_ref = bool(refs)
         has_xrd = bool(active_xrd) and any(visibles)
 
-        plt.rcParams.update({
-            "font.family":      "Arial",
-            "font.size":        font_size,
-            "mathtext.fontset": "custom",
-            "mathtext.it":      "Arial:italic",
-            "mathtext.rm":      "Arial",
-        })
+        plt.rcParams.update({**font_rcparams(plot_style), "font.size": font_size})
 
         gs = None
         if has_ref:
             fig = plt.figure(figsize=(fig_width, fig_height))
-            gs  = gridspec.GridSpec(2, 1, height_ratios=[3, 1], hspace=0.0, figure=fig)
+            gs  = gridspec.GridSpec(2, 1, height_ratios=[2 if show_hkl else 3, 1], hspace=0.0, figure=fig)
             ax_main = fig.add_subplot(gs[0])
             ax_ref  = fig.add_subplot(gs[1], sharex=ax_main)
             ax_main.spines["bottom"].set_color("black")
@@ -1069,6 +1220,7 @@ if active_xrd:
 
         cumulative_y = 0.0
         side_labels  = []
+        prepared_curves, phase_refs = [], []
 
         if has_xrd:
             for i in sort_idx:
@@ -1101,7 +1253,8 @@ if active_xrd:
                     y_plot = y + abs_offsets[i]
                     side_labels.append((abs_offsets[i] + y_min + label_offset_y * (y_max - y_min), colors_sel[i], labels[i]))
 
-                ax_main.plot(x, y_plot, color=colors_sel[i], linewidth=1.2, label=labels[i])
+                ax_main.plot(x, y_plot, color=colors_sel[i], linewidth=plot_style["line_width"], label=labels[i])
+                prepared_curves.append(PreparedCurve(labels[i], x, y_plot, colors_sel[i], plot_style["line_width"]))
 
                 if show_peaks:
                     pks = detect_peaks(x, y, prominence=peak_prom)
@@ -1142,28 +1295,27 @@ if active_xrd:
             plt.setp(ax_main.get_xticklabels(), visible=False)
 
         if ax_ref is not None and refs:
-            bar_height = 80.0
-            row_height = 110.0
+            bar_height = 70.0 if show_hkl else 80.0
+            row_height = 160.0 if show_hkl else 110.0
             row = 0
             for ref in refs:
-                if ref["type"] == "cif":
-                    x_ref, y_ref = calc_cif_pattern(
-                        ref["file"].read(), two_theta_range=(x_min, x_max)
-                    )
-                else:
-                    x_ref, y_ref = parse_pdf_card(
-                        ref["file"].read(), two_theta_range=(x_min, x_max)
-                    )
+                x_ref, y_ref, hkls = reference_data(ref)
                 if x_ref is None or y_ref is None or len(x_ref) == 0 or len(y_ref) == 0:
                     row += 1
                     continue
                 baseline = row * row_height
                 y_norm = y_ref / np.max(y_ref) * bar_height if np.max(y_ref) > 0 else y_ref
+                reference = ReferencePeaks(ref["label"], x_ref, y_ref, hkls, ref["color"],
+                                           ["circle", "triangle", "square", "diamond"][row % 4])
+                phase_refs.append(reference)
                 if row > 0:
                     ax_ref.axhline(y=baseline, color="gray", linewidth=0.6,
                                    linestyle="-", alpha=0.5, zorder=0)
                 ax_ref.vlines(x_ref, baseline, baseline + y_norm,
-                              color=ref["color"], linewidth=1.0, label=ref["label"])
+                              color=ref["color"], linewidth=plot_style["reference_line_width"], label=ref["label"])
+                if show_hkl and hkls:
+                    add_mpl_reference_hkl_labels(ax_ref, reference, baseline=baseline,
+                        scale=bar_height / np.max(y_ref) if np.max(y_ref) > 0 else 1., font_size=annotation_font_size)
                 if show_ref_lines and ref.get("show_line", True):
                     for xv in x_ref:
                         ax_main.axvline(xv, ymin=0, ymax=1,
@@ -1175,7 +1327,7 @@ if active_xrd:
                     lha = "left" if cif_label_side == "左" else "right"
                     ax_ref.text(
                         lx, baseline + cif_label_offset_y * row_height,
-                        ref["label"], fontsize=cif_label_fontsize,
+                        (["○ ", "△ ", "□ ", "◇ "][row % 4] if show_phase_markers else "") + ref["label"], fontsize=cif_label_fontsize,
                         color=ref["color"], va="center", ha=lha,
                     )
                 row += 1
@@ -1191,10 +1343,14 @@ if active_xrd:
                 ax_ref.tick_params(which="minor", axis="x", length=2.5, direction="out")
 
         ax_main.set_xlim(x_min, x_max)
-        if gs is not None:
-            fig.tight_layout(h_pad=0)
-        else:
-            fig.tight_layout()
+        apply_mpl_style(fig, plot_style)
+        if show_phase_markers:
+            matches = match_reference_peaks(prepared_curves, phase_refs, phase_tolerance)
+            add_mpl_phase_annotations(ax_main, matches, show_hkl=False, font_size=annotation_font_size, show_legend=show_legend)
+            if show_legend:
+                ax_main.legend(loc="upper right", frameon=False)
+        if show_zoom and x_min <= zoom_range[0] < zoom_range[1] <= x_max:
+            add_mpl_zoom_inset(ax_main, prepared_curves, zoom_range, location=zoom_location, font_size=annotation_font_size)
         return fig
 
     # ===== インタラクティブ Plotly プレビュー =====
@@ -1205,13 +1361,14 @@ if active_xrd:
         if has_ref:
             pfig = make_subplots(
                 rows=2, cols=1, shared_xaxes=True,
-                row_heights=[0.75, 0.25],
+                row_heights=[2 / 3, 1 / 3] if show_hkl else [0.75, 0.25],
                 vertical_spacing=0,
             )
         else:
             pfig = make_subplots(rows=1, cols=1)
 
         cumulative_y = 0.0
+        prepared_curves, phase_refs = [], []
 
         for i in sort_idx:
             if not visibles[i]:
@@ -1243,9 +1400,10 @@ if active_xrd:
 
             pfig.add_trace(go.Scatter(
                 x=x, y=y_plot, name=mpl_to_plotly(labels[i]),
-                line=dict(color=colors_sel[i], width=1.5),
+                line=dict(color=colors_sel[i], width=plot_style["line_width"] * 4 / 3),
                 mode="lines", showlegend=show_legend,
             ), row=1, col=1)
+            prepared_curves.append(PreparedCurve(labels[i], x, y_plot, colors_sel[i], plot_style["line_width"]))
 
             if show_peaks:
                 pks = detect_peaks(x, y, prominence=peak_prom)
@@ -1268,38 +1426,38 @@ if active_xrd:
                     mode="text",
                     text=[mpl_to_plotly(labels[i])],
                     textposition=textpos,
-                    textfont=dict(color=colors_sel[i], size=label_fontsize, family="Arial"),
+                    textfont=dict(color=colors_sel[i], size=label_fontsize, family=resolve_font(plot_style["font_family"])),
                     showlegend=False,
                     hoverinfo="skip",
                 ), row=1, col=1)
 
         if has_ref and refs:
-            bar_height = 80.0
-            row_height = 110.0
+            bar_height = 70.0 if show_hkl else 80.0
+            row_height = 160.0 if show_hkl else 110.0
             row = 0
             for ref in refs:
-                if ref["type"] == "cif":
-                    x_ref, y_ref = calc_cif_pattern(
-                        ref["file"].read(), two_theta_range=(x_min, x_max)
-                    )
-                else:
-                    x_ref, y_ref = parse_pdf_card(
-                        ref["file"].read(), two_theta_range=(x_min, x_max)
-                    )
+                x_ref, y_ref, hkls = reference_data(ref)
                 if x_ref is None or y_ref is None or len(x_ref) == 0 or len(y_ref) == 0:
                     row += 1
                     continue
                 baseline = row * row_height
                 y_norm = y_ref / np.max(y_ref) * bar_height if np.max(y_ref) > 0 else y_ref
+                reference = ReferencePeaks(ref["label"], x_ref, y_ref, hkls, ref["color"],
+                                           ["circle", "triangle", "square", "diamond"][row % 4])
+                phase_refs.append(reference)
                 vx, vy = [], []
                 for xi, yi in zip(x_ref, y_norm):
                     vx += [float(xi), float(xi), None]
                     vy += [float(baseline), float(baseline + yi), None]
                 pfig.add_trace(go.Scatter(
                     x=vx, y=vy, name=mpl_to_plotly(ref["label"]),
-                    line=dict(color=ref["color"], width=1.0),
+                    line=dict(color=ref["color"], width=plot_style["reference_line_width"] * 4 / 3),
                     mode="lines", showlegend=False,
                 ), row=2, col=1)
+                if show_hkl and hkls:
+                    add_plotly_reference_hkl_labels(pfig, reference, baseline=baseline,
+                        scale=bar_height / np.max(y_ref) if np.max(y_ref) > 0 else 1.,
+                        font_size=annotation_font_size, xref="x2", yref="y2")
                 if show_ref_lines and ref.get("show_line", True):
                     for xv in x_ref:
                         pfig.add_shape(
@@ -1319,9 +1477,9 @@ if active_xrd:
                         x=[lx],
                         y=[baseline + cif_label_offset_y * row_height],
                         mode="text",
-                        text=[mpl_to_plotly(ref["label"])],
+                        text=[(["○ ", "△ ", "□ ", "◇ "][row % 4] if show_phase_markers else "") + mpl_to_plotly(ref["label"])],
                         textposition=textpos_cif,
-                        textfont=dict(color=ref["color"], size=cif_label_fontsize, family="Arial"),
+                        textfont=dict(color=ref["color"], size=cif_label_fontsize, family=resolve_font(plot_style["font_family"])),
                         showlegend=False,
                         hoverinfo="skip",
                     ), row=2, col=1)
@@ -1362,14 +1520,25 @@ if active_xrd:
 
         pfig.update_layout(
             dragmode="zoom",
-            font=dict(family="Arial", size=font_size, color="black"),
-            height=int(fig_height * 85),
-            plot_bgcolor="white", paper_bgcolor="white",
+            font=dict(family=resolve_font(plot_style["font_family"]), size=font_size, color="black"),
+            height=max(320, min(1800, int(fig_height * 96))),
+            plot_bgcolor="rgba(255,255,255,0)" if plot_style["transparent_background"] else "white",
+            paper_bgcolor="rgba(255,255,255,0)" if plot_style["transparent_background"] else "white",
             showlegend=show_legend or show_cif_legend,
             legend=dict(x=1.0, y=1.0, xanchor="right", yanchor="top",
                         font=dict(color="black")),
-            margin=dict(l=60, r=60, t=30, b=60),
+            margin=dict(l=int(fig_width * 96 * plot_style["margin_left"]),
+                        r=int(fig_width * 96 * (1 - plot_style["margin_right"])),
+                        t=int(fig_height * 96 * (1 - plot_style["margin_top"])),
+                        b=int(fig_height * 96 * plot_style["margin_bottom"])),
         )
+        pfig.update_xaxes(linewidth=plot_style["axes_line_width"] * 4 / 3)
+        pfig.update_yaxes(linewidth=plot_style["axes_line_width"] * 4 / 3)
+        if show_phase_markers:
+            matches = match_reference_peaks(prepared_curves, phase_refs, phase_tolerance)
+            add_plotly_phase_annotations(pfig, matches, show_hkl=False, font_size=annotation_font_size, show_legend=show_legend)
+        if show_zoom and x_min <= zoom_range[0] < zoom_range[1] <= x_max:
+            add_plotly_zoom_inset(pfig, prepared_curves, zoom_range, location=zoom_location, font_size=annotation_font_size)
         return pfig
 
     # ===== 描画 & ダウンロード =====
@@ -1388,34 +1557,45 @@ if active_xrd:
         _sl  = bool(show_legend)
         _scl = bool(show_cif_legend)
         fig = build_figure(show_legend=_sl, show_cif_legend=_scl)
-        buf_png = io.BytesIO()
-        fig.savefig(buf_png, format="png", dpi=150, bbox_inches="tight")
-        buf_png.seek(0)
-        png_bytes = buf_png.getvalue()
-        buf_tiff = io.BytesIO()
-        fig.savefig(buf_tiff, format="tiff", dpi=dpi_export, bbox_inches="tight")
-        buf_tiff.seek(0)
-        tiff_bytes = buf_tiff.getvalue()
+        png_bytes = export_figure(fig, "png", 150, style=plot_style)
+        pdf_bytes = export_figure(fig, "pdf", dpi_export, style=plot_style)
+        svg_bytes = export_figure(fig, "svg", dpi_export, style=plot_style)
+        # Bound the in-memory raster canvas for the shared web and PC editions.
+        _raster_ok = fig_width * fig_height * dpi_export ** 2 <= 36_000_000
+        png_export_bytes = export_figure(fig, "png", dpi_export, style=plot_style) if _raster_ok else None
+        tiff_bytes = export_figure(fig, "tiff", dpi_export, style=plot_style) if _raster_ok else None
         plt.close(fig)
 
         with export_tab:
             st.image(png_bytes, use_column_width=True)
             st.caption(T["export_preview_caption"].format(
-                width=fig_width, height=fig_height, dpi=dpi_export,
+                width=inches_to_mm(fig_width), height=inches_to_mm(fig_height), dpi=dpi_export,
             ))
+            st.caption(ui("軸や文字が端で切れる場合は、余白または文字サイズを調整してください。", "If text or axes are clipped, adjust the margins or font sizes."))
 
         st.sidebar.download_button(
-            T["save_tiff"].format(dpi=dpi_export),
-            data=tiff_bytes, file_name="xrd_result.tiff", mime="image/tiff",
-            key=f"dl_tiff_{_sl}_{_scl}_{dpi_export}",
-            use_container_width=True,
+            ui("📥 PDF として保存", "📥 Save as PDF"),
+            data=pdf_bytes, file_name="xrd_result.pdf", mime="application/pdf", use_container_width=True,
         )
         st.sidebar.download_button(
-            T["save_png"],
-            data=png_bytes, file_name="xrd_result.png", mime="image/png",
-            key=f"dl_png_{_sl}_{_scl}",
-            use_container_width=True,
+            ui("📥 SVG として保存", "📥 Save as SVG"),
+            data=svg_bytes, file_name="xrd_result.svg", mime="image/svg+xml", use_container_width=True,
         )
+        if not _raster_ok:
+            st.sidebar.warning(ui("PNG / TIFFは3,600万画素までです。図の寸法またはDPIを下げてください。PDF / SVGは保存できます。", "For PNG / TIFF, reduce the dimensions or DPI to stay within 36 megapixels. PDF / SVG are available."))
+        if _raster_ok:
+            st.sidebar.download_button(
+                T["save_tiff"].format(dpi=dpi_export),
+                data=tiff_bytes, file_name="xrd_result.tiff", mime="image/tiff",
+                key=f"dl_tiff_{_sl}_{_scl}_{dpi_export}",
+                use_container_width=True,
+            )
+            st.sidebar.download_button(
+                T["save_png"].format(dpi=dpi_export),
+                data=png_export_bytes, file_name="xrd_result.png", mime="image/png",
+                key=f"dl_png_{_sl}_{_scl}",
+                use_container_width=True,
+            )
         st.sidebar.divider()
 
 else:

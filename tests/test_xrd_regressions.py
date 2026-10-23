@@ -41,6 +41,13 @@ APP = OPTIONS.app.resolve()
 sys.path.insert(0, str(APP.parent))
 from project_io import GLOBAL_KEYS, PATTERN_KEY, encode_project, decode_project, ProjectError
 from xrd_io import read_patterns, XRDParseError
+from figure_style import (STYLE_DEFAULTS, STYLE_KEYS, FIGURE_PRESETS_MM, mm_to_inches,
+    inches_to_mm, font_rcparams, apply_mpl_style, export_figure, resolve_font, validate_style_settings)
+from style_templates import encode_style_template, decode_style_template
+from project_io import clean_settings
+from plot_annotations import (PreparedCurve, ReferencePeaks, match_reference_peaks,
+    add_mpl_phase_annotations, add_plotly_phase_annotations, add_mpl_reference_hkl_labels,
+    add_plotly_reference_hkl_labels, add_mpl_zoom_inset, add_plotly_zoom_inset, format_hkl_groups)
 SOURCE = APP.read_text(encoding="utf-8")
 TREE = ast.parse(SOURCE, filename=str(APP))
 
@@ -70,9 +77,21 @@ def renderer_namespace(normalize=False):
         GLOBAL_KEYS=GLOBAL_KEYS, PATTERN_KEY=PATTERN_KEY,
         encode_project=encode_project, decode_project=decode_project,
         ProjectError=ProjectError, read_patterns=read_patterns, XRDParseError=XRDParseError,
+        STYLE_DEFAULTS=STYLE_DEFAULTS, STYLE_KEYS=STYLE_KEYS, FIGURE_PRESETS_MM=FIGURE_PRESETS_MM,
+        mm_to_inches=mm_to_inches, inches_to_mm=inches_to_mm, font_rcparams=font_rcparams,
+        apply_mpl_style=apply_mpl_style, export_figure=export_figure, resolve_font=resolve_font,
+        validate_style_settings=validate_style_settings, clean_settings=clean_settings,
+        encode_style_template=encode_style_template, decode_style_template=decode_style_template,
+        PreparedCurve=PreparedCurve, ReferencePeaks=ReferencePeaks, match_reference_peaks=match_reference_peaks,
+        add_mpl_phase_annotations=add_mpl_phase_annotations, add_plotly_phase_annotations=add_plotly_phase_annotations,
+        add_mpl_reference_hkl_labels=add_mpl_reference_hkl_labels, add_plotly_reference_hkl_labels=add_plotly_reference_hkl_labels,
+        add_mpl_zoom_inset=add_mpl_zoom_inset, add_plotly_zoom_inset=add_plotly_zoom_inset,
+        format_hkl_groups=format_hkl_groups,
+        plot_style=dict(STYLE_DEFAULTS), _lang_code="ja", show_hkl=False, show_phase_markers=False,
+        show_zoom=False, zoom_range=(15.,25.), zoom_location="upper left", phase_tolerance=.1, annotation_font_size=8,
         st=SimpleNamespace(session_state={
             "extra_offset_0": 0.35, "extra_offset_1": -0.2, "extra_offset_2": 1.1,
-        }),
+        }, cache_data=lambda **kwargs: lambda fn: fn),
         show_legend=True, show_cif_legend=True, normalize=normalize,
         fig_width=6.0, fig_height=4.0, font_size=10,
         major_tick=10.0, show_minor=True, minor_tick=2.0,
@@ -121,6 +140,12 @@ def extract_pdf_card_label(pdf_bytes):
     by_name = {node.name: node for node in replacements}
     tree.body = [copy.deepcopy(by_name.get(node.name, node))
                  if isinstance(node, ast.FunctionDef) else node for node in tree.body]
+    # Streamlit 1.32 AppTest serializes formatted selectbox values incorrectly.
+    # Keep the application's real options/callbacks; remove only presentation
+    # formatting from the test source (browser verification covers labels).
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "selectbox":
+            node.keywords = [kw for kw in node.keywords if kw.arg != "format_func"]
     tree = ast.fix_missing_locations(tree)
     capture = '''
 if active_xrd:

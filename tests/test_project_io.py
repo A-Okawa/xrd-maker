@@ -82,6 +82,7 @@ class ProjectTests(unittest.TestCase):
 class DesktopResumeTests(unittest.TestCase):
     def test_resume_edit_and_reopen_without_reloading_old_settings(self):
         from streamlit.testing.v1 import AppTest
+        from test_xrd_regressions import ui_test_source
         app = Path(__file__).resolve().parents[1] / "app.py"
         original = {"native.ras": b'*RAS_DATA_START\n*RAS_HEADER_START\n*MEAS_SCAN_AXIS_X "TwoTheta"\n*RAS_HEADER_END\n*RAS_INT_START\n10 1 1\n20 4 1\n30 2 1\n*RAS_INT_END\n*RAS_DATA_END\n'}
         with tempfile.TemporaryDirectory() as directory:
@@ -91,7 +92,7 @@ class DesktopResumeTests(unittest.TestCase):
                 "_val_lbl_0": "Restored sample", "xrd_color_0": "#1976d2",
             }))
             with patch.dict("os.environ", {"XRD_MAKER_LOCAL": "1", "XRD_MAKER_DATA_DIR": directory}):
-                at = AppTest.from_file(str(app), default_timeout=60).run()
+                at = AppTest.from_string(ui_test_source(), default_timeout=60).run()
                 self.assertFalse(at.exception, [e.message for e in at.exception])
                 resume = next(button for button in at.button if "自動保存から再開" in button.label)
                 resume.click().run()
@@ -103,7 +104,7 @@ class DesktopResumeTests(unittest.TestCase):
                 at.run()
                 self.assertFalse(at.checkbox(key="normalize").value)
                 self.assertFalse(decode_project(path.read_bytes())["settings"]["normalize"])
-                reopened = AppTest.from_file(str(app), default_timeout=60).run()
+                reopened = AppTest.from_string(ui_test_source(), default_timeout=60).run()
                 next(button for button in reopened.button if "自動保存から再開" in button.label).click().run()
                 self.assertFalse(reopened.exception, [e.message for e in reopened.exception])
                 self.assertFalse(reopened.checkbox(key="normalize").value)

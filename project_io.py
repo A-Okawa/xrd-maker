@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import re
 import tempfile
+from figure_style import STYLE_KEYS, validate_style_settings
 
 PROJECT_VERSION = 3
 MAX_PROJECT_BYTES = 190 * 1024 * 1024
@@ -21,23 +22,25 @@ GLOBAL_KEYS = (
     "minor_tick", "cif_label_side", "cif_label_fontsize", "cif_label_offset_x",
     "cif_label_offset_y", "show_side_labels", "label_side", "label_fontsize",
     "label_offset_x", "label_offset_y", "fig_width", "fig_height", "dpi_export",
-    "font_size", "show_panel", "lang_radio",
-)
+    "font_size", "show_panel", "lang_radio", "show_phase_markers", "show_hkl",
+    "phase_tolerance", "annotation_font_size", "show_zoom", "zoom_range", "zoom_location",
+) + tuple(STYLE_KEYS)
 PATTERN_KEY = re.compile(
     r"(?:vis|ord|_val_lbl|xrd_color|extra_offset|yoff|cvis|cord|_val_clbl|"
     r"cif_color|cref_line|pvis|pord|_val_plbl|pdf_color|pref_line)_\d+$"
 )
 BOOL_KEYS = {"normalize", "show_legend", "show_cif_legend", "show_ref_lines",
-             "show_peaks", "show_minor", "show_side_labels", "show_panel"}
+             "show_peaks", "show_minor", "show_side_labels", "show_panel",
+             "show_phase_markers", "show_hkl", "show_zoom"}
 BOUNDS = {
     "peak_prom": (.01, .5), "global_offset": (0., 3.), "major_tick": (1., 30.),
     "minor_tick": (.5, 10.), "cif_label_fontsize": (5, 20),
     "cif_label_offset_x": (0., 10.), "cif_label_offset_y": (0., 1.),
     "label_fontsize": (5, 24), "label_offset_x": (-5., 5.),
-    "label_offset_y": (-.3, 1.), "fig_width": (6., 20.), "fig_height": (4., 20.),
-    "font_size": (8, 20),
+    "label_offset_y": (-.3, 1.), "fig_width": (25 / 25.4, 20.), "fig_height": (25 / 25.4, 20.),
+    "font_size": (6, 28), "phase_tolerance": (.01, 1.), "annotation_font_size": (5, 16),
 }
-INT_KEYS = {"cif_label_fontsize", "label_fontsize", "font_size"}
+INT_KEYS = {"cif_label_fontsize", "label_fontsize", "font_size", "annotation_font_size"}
 
 
 class ProjectError(ValueError):
@@ -51,19 +54,25 @@ def _number(value):
 def clean_settings(settings: dict) -> dict:
     if not isinstance(settings, dict):
         raise ProjectError("Project settings must be an object.")
+    try:
+        style_values = validate_style_settings(settings)
+    except (ValueError, TypeError) as exc:
+        raise ProjectError(str(exc)) from exc
     cleaned = {}
     for key, value in settings.items():
         if key not in GLOBAL_KEYS and not PATTERN_KEY.fullmatch(key):
             continue
         valid = True
-        if key in BOOL_KEYS or re.fullmatch(r"(?:vis|cvis|pvis|cref_line|pref_line)_\d+", key):
+        if key in STYLE_KEYS:
+            value = style_values[key]
+        elif key in BOOL_KEYS or re.fullmatch(r"(?:vis|cvis|pvis|cref_line|pref_line)_\d+", key):
             valid = isinstance(value, bool)
         elif key in BOUNDS:
             lower, upper = BOUNDS[key]
             valid = _number(value) and lower <= value <= upper
             if key in INT_KEYS:
                 valid = valid and isinstance(value, int)
-        elif key == "xrange":
+        elif key in ("xrange", "zoom_range"):
             valid = (isinstance(value, (list, tuple)) and len(value) == 2
                      and all(_number(v) for v in value) and 0 <= value[0] < value[1] <= 180)
             if valid:
@@ -72,6 +81,8 @@ def clean_settings(settings: dict) -> dict:
             valid = value in ("左", "右")
         elif key == "lang_radio":
             valid = value in ("日本語", "English")
+        elif key == "zoom_location":
+            valid = value in ("upper left", "upper right", "lower left", "lower right")
         elif key == "dpi_export":
             valid = type(value) is int and value in (300, 600)
         elif re.fullmatch(r"(?:ord|cord|pord)_\d+", key):

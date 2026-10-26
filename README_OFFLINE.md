@@ -44,7 +44,10 @@ bash launch_linux.sh
 - 測定曲線・リファレンス・軸の線幅、フォント、上下左右の余白を設定できます。保存画像のプレビューで文字切れを確認してください。
 - PDF / SVG はベクトル出力、PNG / TIFF は 300 / 600 DPI で出力します。指定寸法を保持し、保存時に余白を自動で切り詰めません。PNG / TIFF は最大 3,600 万画素です。
 - PDF は TrueType フォントを埋め込みます。SVG は編集可能な文字または文字のパス化を選べます。編集可能な文字の再現には開く PC にも同じフォントが必要です。選んだフォントがない場合は同系統のフォントを使います。
-  Arial がない環境（Streamlit Cloud など）では、グラフ描画appと同じく字幅が同じ Liberation Sans で描き、SVG には Arial と書き込みます（手元の PC で開けば Arial になります）。
+  アプリには、Arial・Times New Roman と字幅が同じ Liberation Sans・Liberation Serif が入っています（`fonts/`、SIL Open Font License 1.1、`fonts/OFL.txt`）。
+  Arial がない環境（Streamlit Cloud など）では、グラフ描画appと同じくこれで描き、SVG には Arial と書き込みます（手元の PC で開けば Arial になります）。
+  サーバーに入っているフォントには頼らないので、Web 版でも目盛り・軸名・ラベルがすべて同じ書体になります（以前の Web 版は、Arial の代わりが見つからず matplotlib 付属の DejaVu Sans で描いていました）。
+  字幅は Arial と同じですが字形は少し違い、大文字がわずかに低めです。PowerPoint で打った Arial の文字と完全にそろえたいときは、SVG（編集可能な文字）で保存して PC で開くか、PC 版を使ってください。
   Liberation Sans にない記号（リファレンスの △ ◇）は DejaVu Sans で補います。
 - 「ピーク注記・拡大図」では、メイン図内の範囲を拡大表示できます。CIF リファレンスは Cu Kα で計算し、強いピークを優先して最大 12 個の hkl 注記を表示できます。
 - リファレンスとの記号照合は指定許容差内の実測ピークに表示します。これは位置の照合で、相同定や精密化ではありません。使用するリファレンスはパターン設定で表示対象を選んでください。
@@ -126,7 +129,7 @@ python build_bundle.py --output dist/XRD-Maker-PC.zip
 python build_bundle.py --wheelhouse ./wheelhouse --output dist/XRD-Maker-PC-with-wheels.zip
 ```
 
-配布用ファイルを明示的に選んで ZIP にまとめます。Streamlit Cloud 用の `packages.txt`（Liberation Sans を入れる `fonts-liberation`）は PC 版には含みません。`.git`、`.venv`、Streamlit の秘密情報、ユーザーデータ、キャッシュは含めません。
+配布用ファイルを明示的に選んで ZIP にまとめます。図のフォント（`fonts/` の Liberation Sans・Liberation Serif と `OFL.txt`）も含めます。`.git`、`.venv`、Streamlit の秘密情報、ユーザーデータ、キャッシュは含めません。
 ZIP の `BUNDLE_MANIFEST.json` には、含まれるソースファイルと SHA-256 を記録します。
 wheelhouse を添付した配布物は、それを作成した OS・CPU・Python の組合せ専用です。
 Python を同梱する `.exe` / `.app` 形式はこの配布物には含みません。

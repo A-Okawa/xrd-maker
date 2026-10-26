@@ -13,6 +13,10 @@ import zipfile
 BUNDLE_FILES = (
     "app.py", "requirements.txt", "xrd_io.py", "project_io.py", "figure_style.py",
     "plot_annotations.py", "style_templates.py", "palettes.py", "rich_text.py", "colors.csv",
+    "fonts/LiberationSans-Regular.ttf", "fonts/LiberationSans-Bold.ttf",
+    "fonts/LiberationSans-Italic.ttf", "fonts/LiberationSans-BoldItalic.ttf",
+    "fonts/LiberationSerif-Regular.ttf", "fonts/LiberationSerif-Bold.ttf",
+    "fonts/LiberationSerif-Italic.ttf", "fonts/LiberationSerif-BoldItalic.ttf", "fonts/OFL.txt",
     "desktop.py", "setup_local.py", "build_bundle.py", "README_OFFLINE.md",
     "setup_mac.command", "launch_mac.command", "setup_linux.sh", "launch_linux.sh",
     "setup_windows.bat", "launch_windows.bat",

@@ -10,6 +10,7 @@ from __future__ import annotations
 import io
 import math
 from collections.abc import Mapping
+from pathlib import Path
 
 import matplotlib as mpl
 from matplotlib import font_manager
@@ -17,6 +18,13 @@ from matplotlib.text import Text
 
 
 MM_PER_INCH = 25.4
+# Liberation Sans and Liberation Serif 2.1.5 (SIL Open Font License 1.1, see fonts/OFL.txt) have
+# the same character widths as Arial and Times New Roman and ship with the app: figures never
+# depend on fonts installed on the server (Streamlit Cloud has neither Arial nor a substitute,
+# so matplotlib used to draw in its own DejaVu Sans there) or on a new PC.
+FONT_DIR = Path(__file__).resolve().parent / "fonts"
+BUNDLED_FONT_FILES = tuple(f"Liberation{family}-{style}.ttf" for family in ("Sans", "Serif")
+                           for style in ("Regular", "Bold", "Italic", "BoldItalic"))
 # The same choices as the graph app (figapp), plus Times New Roman kept for earlier projects.
 FONT_FAMILIES = ("Arial", "Helvetica", "Liberation Sans", "DejaVu Sans", "Times New Roman")
 # Installed fonts tried in order, as in the graph app: Arial-compatible fonts first, DejaVu last.
@@ -181,6 +189,29 @@ def validate_style_settings(settings: Mapping | None, *, fill_defaults: bool = F
     return merged if fill_defaults else cleaned
 
 
+def register_bundled_fonts() -> list[str]:
+    """Make the bundled fonts known to matplotlib; safe to call again (Streamlit reruns, reloads).
+
+    An installed font of the same family stays usable; matplotlib's font lookup cache is cleared
+    by ``addfont``, so earlier "not found" answers in a long-running server are not reused.
+    """
+    known = {entry.fname for entry in font_manager.fontManager.ttflist}
+    added = []
+    for name in BUNDLED_FONT_FILES:
+        path = FONT_DIR / name
+        if not path.is_file() or str(path) in known:
+            continue
+        try:
+            font_manager.fontManager.addfont(str(path))
+        except (OSError, RuntimeError, ValueError):
+            continue
+        added.append(name)
+    return added
+
+
+register_bundled_fonts()
+
+
 def resolve_font_family(requested: str = "Arial") -> str:
     """Resolve an installed font, keeping serif/sans-serif character on fallback.
 
@@ -224,6 +255,8 @@ def font_rcparams(settings: Mapping | None = None) -> dict:
     family = resolve_font_family(style["font_family"])
     return {
         "font.family": font_family_list(family),
+        # Anything that asks for the generic sans-serif family gets the chosen font as well.
+        "font.sans-serif": font_family_list(family),
         "mathtext.fontset": "custom",
         "mathtext.default": "it",
         "mathtext.rm": family,
@@ -321,7 +354,6 @@ def export_figure(fig, format: str, dpi: float = 300, settings: Mapping | None =
     if not 0 < dpi <= 2400:
         raise ValueError("DPI must be greater than zero and at most 2400.")
     size_to_inches(*fig.get_size_inches(), "inch")
-    apply_mpl_style(fig, style_values)
     background = "none" if style_values["transparent_background"] else "white"
     rc = {**font_rcparams(style_values), "savefig.bbox": None, "savefig.pad_inches": 0.0}
     result = io.BytesIO()
@@ -333,6 +365,8 @@ def export_figure(fig, format: str, dpi: float = 300, settings: Mapping | None =
         if features.check("libtiff"):
             save_options["pil_kwargs"] = {"compression": "tiff_adobe_deflate"}
     with mpl.rc_context(rc):
+        # Inside the font settings, so text made while styling or drawing uses them too.
+        apply_mpl_style(fig, style_values)
         fig.savefig(
             result, format=format, dpi=dpi, bbox_inches=None, pad_inches=0,
             facecolor=background, edgecolor=background,

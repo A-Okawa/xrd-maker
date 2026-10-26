@@ -745,8 +745,10 @@ def color_picker_popover(key: str, default_hex: str, n_items: int = 1):
             st.session_state[view_key] = st.session_state.get("palette", DEFAULT_PALETTE)
         st.selectbox(ui("色の組み合わせ", "Palette"), list(SWATCH_SETS), key=view_key,
                      format_func=swatch_set_label,
-                     help=ui("上の 8 つはグラフ描画appと同じ色です。濃淡は、色を付けるパターンの数（または「濃淡の段数」）で分けた色です。",
-                             "The first entries are the graph app's colours. Shades are split by the number of coloured patterns (or the shade steps)."))
+                     help=ui("上の 8 つはグラフ描画appと同じ組み合わせです。濃淡は、色を付けるパターンの数（または「濃淡の段数」）で分けた色で、"
+                             "一番薄い色でも白地とのコントラストが 3:1 以上です。",
+                             "The first entries are the graph app's palettes. Shades are split by the number of coloured patterns "
+                             "(or the shade steps); even the lightest has at least 3:1 contrast against white."))
         colors = swatch_set_colors(st.session_state[view_key], n_items)
         cols = st.columns(len(colors))
         for j, hex_c in enumerate(colors):
@@ -1228,8 +1230,10 @@ if active_xrd:
                 st.markdown(ui("#### 色", "#### Colours"))
                 st.selectbox(ui("色の組み合わせ", "Palette"), list(PALETTES), key="palette",
                     format_func=lambda key: PALETTE_NAMES[_lang_code][key], on_change=_apply_palette,
-                    help=ui("グラフ描画appと同じ色の組み合わせです。選ぶと、表示中のパターンに表示順で色が付きます。",
-                            "The graph app's palettes. Choosing one colours the visible patterns in display order."))
+                    help=ui("グラフ描画appと同じ色の組み合わせです。選ぶと、表示中のパターンに表示順で色が付きます。"
+                            "濃淡と viridis は、一番薄い色でも白地とのコントラストが 3:1 以上（細い線の目安）になる濃さから始まります。",
+                            "The graph app's palettes. Choosing one colours the visible patterns in display order. "
+                            "Shades and viridis start at a colour with at least 3:1 contrast against white (the guideline for thin lines)."))
                 if len(active_xrd) >= 2:
                     _n = len(active_xrd)
                     _lo, _hi = palette_range(_n)
@@ -1257,8 +1261,8 @@ if active_xrd:
                 _pc1, _pc2 = st.columns([0.45, 0.55])
                 _pc1.number_input(ui("濃淡の段数", "Shade steps"), min_value=0, max_value=MAX_SHADE_STEPS, step=1,
                     key="palette_steps", on_change=_apply_palette,
-                    help=ui("0 はパターンの数で分けます。グラフ描画appの図と系列の数が違うときは、その系列の数を入れると同じ濃さになります（濃淡と viridis）。",
-                            "0 splits the shades by the number of patterns. Enter the number of series of a graph-app figure to get its exact shades (shades and viridis)."))
+                    help=ui("0 はパターンの数で分けます。ほかの図と系列の数が違うときは、その図の系列の数を入れると同じ濃さになります（濃淡と viridis）。",
+                            "0 splits the shades by the number of patterns. Enter the number of series of another figure to get its shades (shades and viridis)."))
                 _pc2.markdown('<div style="height:1.75rem"></div>', unsafe_allow_html=True)
                 _pc2.button(ui("色を当てはめ直す", "Re-apply"), on_click=_apply_palette, use_container_width=True,
                     help=ui("パターンごとに変えた色を戻すときや、表示順・表示を変えたあとに押します。",

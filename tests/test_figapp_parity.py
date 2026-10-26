@@ -2,7 +2,10 @@
 
 The palette and markup code must give the same results as the graph app, so the
 graph app's palette function and palette lists are reproduced here verbatim and
-compared colour by colour. UI tests run the real app with synthetic data.
+compared colour by colour. The one intended difference: the shades start no lighter
+than a 3:1 contrast against white (thin lines), so their light end differs from the
+graph app while their colour maps and dark end are the same. UI tests run the real
+app with synthetic data.
 """
 
 import copy
@@ -23,8 +26,9 @@ APP_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(APP_DIR))
 from figure_style import (STYLE_DEFAULTS, css_font_stack, export_figure, font_family_list, font_rcparams,
                           resolve_font_family, svg_font_names, validate_style_settings)
-from palettes import (NAMED_COLORS, PALETTES, PALETTE_NAMES, color_emoji, load_colors, palette_colors,
-                      palette_sequence, parse_colors, swatch_colors)
+from palettes import (NAMED_COLORS, PALETTES, PALETTE_NAMES, color_emoji, contrast_ratio, is_shade_palette,
+                      load_colors, palette_colors, palette_sequence, parse_colors, relative_luminance,
+                      shade_interval, swatch_colors)
 from project_io import ProjectError, clean_settings, decode_project, encode_project
 from rich_text import plain, rich, to_html
 from style_templates import TEMPLATE_KEYS, decode_style_template, encode_style_template
@@ -54,23 +58,65 @@ def figapp_palette_colors(name, n, reverse=False):
     return cols[::-1] if reverse else cols
 
 
+SHADES = [name for name in PALETTES if is_shade_palette(name)]
+
+
 class PaletteParityTests(unittest.TestCase):
-    def test_same_palettes_names_and_colours_as_the_graph_app(self):
+    def test_same_palettes_names_and_list_colours_as_the_graph_app(self):
         self.assertEqual(PALETTES, FIGAPP_PALETTES)
         self.assertEqual(PALETTE_NAMES["ja"], FIGAPP_PALETTE_NAMES)
         self.assertEqual(set(PALETTE_NAMES["en"]), set(PALETTES))
+        self.assertEqual(SHADES, ["blues", "oranges", "greens", "greys", "viridis"])
         for name in PALETTES:
+            if name in SHADES:
+                continue
             for n in range(1, 13):
                 for reverse in (False, True):
                     with self.subTest(name=name, n=n, reverse=reverse):
                         self.assertEqual([c.upper() for c in palette_colors(name, n, reverse)],
                                          [c.upper() for c in figapp_palette_colors(name, n, reverse)])
 
+    def test_every_shade_reaches_three_to_one_against_white(self):
+        for name in SHADES:
+            for n in range(1, 13):
+                for reverse in (False, True):
+                    with self.subTest(name=name, n=n, reverse=reverse):
+                        cols = palette_colors(name, n, reverse)
+                        self.assertEqual(len(cols), n)
+                        low = [(c, round(contrast_ratio(c), 3)) for c in cols if contrast_ratio(c) < 3.0]
+                        self.assertFalse(low, low)
+                        if n > 1:   # still light to dark (reversed: dark to light) and all different
+                            lums = [relative_luminance(c) for c in cols]
+                            self.assertEqual(lums, sorted(lums, reverse=(name != "viridis") != reverse))
+                            self.assertEqual(len(set(cols)), n)
+
+    def test_light_end_is_the_lightest_colour_that_reaches_three_to_one(self):
+        for name in SHADES:
+            with self.subTest(name=name):
+                cmap = plt.get_cmap(PALETTES[name])
+                start, end = shade_interval(name)
+                ours, theirs = palette_colors(name, 5), [c.upper() for c in figapp_palette_colors(name, 5)]
+                to_hex = lambda t: matplotlib.colors.to_hex(cmap(t)).upper()
+                if name == "viridis":                 # light at 0.95: that end moves
+                    self.assertEqual((start, ours[0]), (0.35, theirs[0]))
+                    light, lighter = end, end + 1 / 256
+                else:                                  # light at 0.35: that end moves, the dark end stays
+                    self.assertEqual((end, ours[-1]), (0.95, theirs[-1]))
+                    light, lighter = start, start - 1 / 256
+                self.assertGreaterEqual(contrast_ratio(to_hex(light)), 3.0)
+                self.assertLess(contrast_ratio(to_hex(lighter)), 3.0)     # one colour-table step lighter fails
+                self.assertLess(contrast_ratio(theirs[0 if name != "viridis" else -1]), 3.0)
+
     def test_known_shades_are_pinned(self):
-        # Blues, 3 series: what the graph app draws for 750 / 950 / 1050 °C.
-        self.assertEqual(palette_colors("blues", 3), ["#A6CEE4", "#3B8BC2", "#083C7D"])
-        self.assertEqual(palette_colors("blues", 3, reverse=True), ["#083C7D", "#3B8BC2", "#A6CEE4"])
+        # Blues, 3 series (750 / 950 / 1050 °C): the lightest has 3.01:1 against white (the graph app's #A6CEE4 has 1.67:1).
+        self.assertEqual(palette_colors("blues", 3), ["#519CCC", "#1E6DB2", "#083C7D"])
+        self.assertEqual(palette_colors("blues", 3, reverse=True), ["#083C7D", "#1E6DB2", "#519CCC"])
+        self.assertEqual(palette_colors("oranges", 3), ["#F26D17", "#CD4401", "#8E2D04"])
+        self.assertEqual([palette_colors(name, 3)[0 if name != "viridis" else -1] for name in SHADES],
+                         ["#519CCC", "#F26D17", "#3FA85B", "#949494", "#22A785"])
+        # One series keeps the graph app's 0.75 when it is inside the range, else the end of the range.
         self.assertEqual(palette_colors("greys", 1), [matplotlib.colors.to_hex(plt.get_cmap("Greys")(0.75)).upper()])
+        self.assertEqual(palette_colors("viridis", 1), ["#22A785"])
         self.assertEqual(palette_colors("paper", 0), [])
 
     def test_steps_reproduce_a_figure_with_another_series_count(self):

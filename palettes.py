@@ -1,18 +1,22 @@
 """Colour palettes and named colours shared with the graph app (figapp).
 
-The palette lists, their names and the way shades are sampled are the same as in
-figapp's ``figcore.py``: with the same palette and the same number of series, both
-apps give exactly the same colours. ``colors.csv`` uses figapp's format (one
-``名前,#RRGGBB`` per line), so a colors.csv copied from the graph app's folder gives
-the same named colours here.
+The palette lists, their names and the colour maps behind the shades are the same as in
+figapp's ``figcore.py``. The list palettes (論文用, Okabe–Ito, matplotlib 標準) give exactly
+the graph app's colours. The shades (青・朱・緑・灰の濃淡, viridis) come from the same part
+of the same colour maps (0.35–0.95), except that the lighter end is moved inward until its
+colour reaches a 3:1 contrast against white, the guideline for thin lines (WCAG 2.x,
+1.4.11 non-text contrast), so the lightest shade stays visible in print and on projectors.
+``colors.csv`` uses figapp's format (one ``名前,#RRGGBB`` per line), so a colors.csv copied
+from the graph app's folder gives the same named colours here.
 """
 
 from __future__ import annotations
 
+from functools import lru_cache
 import re
 
 import matplotlib
-from matplotlib.colors import to_hex
+from matplotlib.colors import to_hex, to_rgb
 
 
 PALETTES = {
@@ -30,6 +34,10 @@ PALETTE_NAMES = {
 }
 DEFAULT_PALETTE = "paper"
 MAX_SHADE_STEPS = 12
+MIN_CONTRAST = 3.0              # against white: the guideline for lines and other graphics
+SHADE_INTERVAL = (0.35, 0.95)   # the graph app's part of the colour map (first series, last series)
+SHADE_SINGLE = 0.75             # one series: the graph app's point, kept inside the interval
+_GRID = 0.001                   # finer than the 256-entry colour tables, so every entry is checked
 
 # References start in black, then take distinct Okabe–Ito hues (used unless the palette is applied to them).
 REFERENCE_COLORS = ["#000000", "#D55E00", "#009E73", "#CC79A7", "#E69F00", "#56B4E9", "#0072B2", "#4D4D4D"]
@@ -47,12 +55,49 @@ def is_shade_palette(name: str) -> bool:
     return isinstance(PALETTES.get(name), str)
 
 
-def palette_colors(name: str, n: int, reverse: bool = False) -> list[str]:
-    """Colours for n series, exactly as figapp gives them.
+def relative_luminance(color) -> float:
+    """WCAG relative luminance of a colour (0 for black, 1 for white)."""
+    def linear(v):
+        return v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4
+    r, g, b = to_rgb(color)
+    return 0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b)
 
-    Shades run from light to dark over 0.35–0.95 of the colour map (one series: 0.75);
-    reverse=True starts with the dark one. Other palettes repeat their list, and
-    reverse=True reverses the order of the colours.
+
+def contrast_ratio(color, background="#FFFFFF") -> float:
+    """WCAG contrast ratio between two colours, from 1 to 21 (3:1 is the guideline for thin lines)."""
+    a, b = relative_luminance(color), relative_luminance(background)
+    return (max(a, b) + 0.05) / (min(a, b) + 0.05)
+
+
+@lru_cache(maxsize=None)
+def shade_interval(name: str) -> tuple[float, float]:
+    """Where the shades of a colour-map palette come from: (t of the first series, t of the last).
+
+    The graph app's 0.35 → 0.95, with the lighter end moved inward, step by step from the
+    darker end, as long as the colour as drawn (#RRGGBB) reaches MIN_CONTRAST against white.
+    Every colour in between reaches it too. Blues, Oranges, Greens and Greys are light at
+    0.35; viridis is light at 0.95, so there the 0.95 end moves.
+    """
+    cmap = matplotlib.colormaps[PALETTES[name]]
+    first, last = SHADE_INTERVAL
+    light_first = relative_luminance(to_hex(cmap(first))) > relative_luminance(to_hex(cmap(last)))
+    dark, light = (last, first) if light_first else (first, last)
+    step = _GRID if light > dark else -_GRID
+    end = dark
+    for k in range(1, int(round(abs(light - dark) / _GRID)) + 1):
+        t = round(dark + k * step, 6)
+        if contrast_ratio(to_hex(cmap(t))) < MIN_CONTRAST:
+            break
+        end = t
+    return (end, last) if light_first else (first, end)
+
+
+def palette_colors(name: str, n: int, reverse: bool = False) -> list[str]:
+    """Colours for n series.
+
+    List palettes repeat their list, exactly as the graph app (reverse=True reverses the order).
+    Shades run from light to dark over shade_interval (one series: 0.75, kept inside it), so the
+    lightest still has a 3:1 contrast against white; reverse=True starts with the dark one.
     """
     n = int(n)
     if n <= 0:
@@ -60,9 +105,10 @@ def palette_colors(name: str, n: int, reverse: bool = False) -> list[str]:
     p = PALETTES.get(name, PALETTES[DEFAULT_PALETTE])
     if isinstance(p, str):
         cmap = matplotlib.colormaps[p]
+        start, end = shade_interval(name)
         if n == 1:
-            return [to_hex(cmap(0.75)).upper()]
-        cols = [to_hex(cmap(0.35 + 0.6 * i / (n - 1))).upper() for i in range(n)]
+            return [to_hex(cmap(min(max(SHADE_SINGLE, min(start, end)), max(start, end)))).upper()]
+        cols = [to_hex(cmap(start + (end - start) * i / (n - 1))).upper() for i in range(n)]
     else:
         cols = [p[i % len(p)].upper() for i in range(n)]
     return cols[::-1] if reverse else cols

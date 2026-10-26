@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 import tempfile
 from figure_style import STYLE_KEYS, validate_style_settings
+from palettes import PALETTES
 
 PROJECT_VERSION = 3
 MAX_PROJECT_BYTES = 190 * 1024 * 1024
@@ -24,6 +25,8 @@ GLOBAL_KEYS = (
     "label_offset_x", "label_offset_y", "fig_width", "fig_height", "dpi_export",
     "font_size", "show_panel", "lang_radio", "show_phase_markers", "show_hkl",
     "phase_tolerance", "annotation_font_size", "show_zoom", "zoom_range", "zoom_location",
+    "tick_font_size", "legend_font_size", "x_label", "y_label",
+    "palette", "palette_reverse", "palette_refs", "palette_steps",
 ) + tuple(STYLE_KEYS)
 PATTERN_KEY = re.compile(
     r"(?:vis|ord|_val_lbl|xrd_color|extra_offset|yoff|cvis|cord|_val_clbl|"
@@ -31,16 +34,19 @@ PATTERN_KEY = re.compile(
 )
 BOOL_KEYS = {"normalize", "show_legend", "show_cif_legend", "show_ref_lines",
              "show_peaks", "show_minor", "show_side_labels", "show_panel",
-             "show_phase_markers", "show_hkl", "show_zoom"}
+             "show_phase_markers", "show_hkl", "show_zoom", "palette_reverse", "palette_refs"}
 BOUNDS = {
     "peak_prom": (.01, .5), "global_offset": (0., 3.), "major_tick": (1., 30.),
     "minor_tick": (.5, 10.), "cif_label_fontsize": (5, 20),
     "cif_label_offset_x": (0., 10.), "cif_label_offset_y": (0., 1.),
     "label_fontsize": (5, 24), "label_offset_x": (-5., 5.),
     "label_offset_y": (-.3, 1.), "fig_width": (25 / 25.4, 20.), "fig_height": (25 / 25.4, 20.),
-    "font_size": (6, 28), "phase_tolerance": (.01, 1.), "annotation_font_size": (5, 16),
+    "font_size": (4, 28), "tick_font_size": (4, 28), "legend_font_size": (4, 28),
+    "phase_tolerance": (.01, 1.), "annotation_font_size": (5, 16), "palette_steps": (0, 12),
 }
-INT_KEYS = {"cif_label_fontsize", "label_fontsize", "font_size", "annotation_font_size"}
+# Axis-label, tick and legend sizes take half points (7, 6.5 pt) as in the graph app.
+INT_KEYS = {"cif_label_fontsize", "label_fontsize", "annotation_font_size", "palette_steps"}
+MAX_AXIS_LABEL = 500
 
 
 class ProjectError(ValueError):
@@ -83,6 +89,10 @@ def clean_settings(settings: dict) -> dict:
             valid = value in ("日本語", "English")
         elif key == "zoom_location":
             valid = value in ("upper left", "upper right", "lower left", "lower right")
+        elif key in ("x_label", "y_label"):
+            valid = isinstance(value, str) and len(value) <= MAX_AXIS_LABEL
+        elif key == "palette":
+            valid = value in PALETTES
         elif key == "dpi_export":
             valid = type(value) is int and value in (300, 600)
         elif re.fullmatch(r"(?:ord|cord|pord)_\d+", key):

@@ -9,6 +9,7 @@ from scipy.signal import find_peaks
 from collections import OrderedDict
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+import inspect
 import io
 import os
 import re
@@ -24,10 +25,15 @@ from project_io import (
 )
 from xrd_io import read_patterns, XRDParseError, SUPPORTED_EXTENSIONS
 from figure_style import (
-    STYLE_DEFAULTS, STYLE_KEYS, FIGURE_PRESETS_MM, mm_to_inches, inches_to_mm,
-    font_rcparams, apply_mpl_style, export_figure, resolve_font,
+    STYLE_DEFAULTS, STYLE_KEYS, FIGURE_PRESETS_MM, FONT_FAMILIES, METRIC_COMPATIBLE, mm_to_inches, inches_to_mm,
+    font_rcparams, apply_mpl_style, export_figure, resolve_font, css_font_stack,
     validate_style_settings,
 )
+from palettes import (
+    PALETTES, PALETTE_NAMES, DEFAULT_PALETTE, REFERENCE_COLORS, MAX_SHADE_STEPS,
+    palette_sequence, swatch_colors, load_colors, color_emoji,
+)
+from rich_text import rich, to_html
 from style_templates import encode_style_template, decode_style_template
 from plot_annotations import (
     PreparedCurve, ReferencePeaks, match_reference_peaks,
@@ -38,6 +44,11 @@ from plot_annotations import (
 )
 
 LOCAL_MODE = os.environ.get("XRD_MAKER_LOCAL") == "1"
+# Named colours in the graph app's format; copy that app's colors.csv here to share its names.
+COLORS_FILE = Path(__file__).resolve().parent / "colors.csv"
+# Axis titles in the graph app's markup (<i>…</i>, _{…}, ^{…}); the defaults draw as before.
+DEFAULT_X_LABEL = "Diffraction angle, 2<i>θ</i> (deg.)"
+DEFAULT_Y_LABEL = "Intensity (a.u.)"
 LOCAL_DATA_DIR = (Path(os.environ["XRD_MAKER_DATA_DIR"]).expanduser()
                   if LOCAL_MODE and os.environ.get("XRD_MAKER_DATA_DIR") else None)
 
@@ -69,12 +80,12 @@ TRANSLATIONS = {
         "color_brown": "茶・ベージュ系",
         "color_gray": "黒・グレー系",
         "label": "ラベル",
-        "add_italic": "＋italic",
-        "italic_help": r"末尾に $\it{TEXT}$ を追加。TEXTを書き換えて使用",
-        "add_subscript": "＋下付き",
-        "subscript_help": r"末尾に $_{N}$ を追加。Nを書き換えて使用",
-        "add_superscript": "＋上付き",
-        "superscript_help": r"末尾に $^{N}$ を追加。Nを書き換えて使用",
+        "add_italic": "＋斜体",
+        "italic_help": "末尾に `<i>TEXT</i>` を追加。TEXT を書き換えて使用。文字を選んで Ctrl+I（Mac は ⌘+I）でも斜体",
+        "add_subscript": "＋x₂",
+        "subscript_help": "下付き：末尾に `_{N}` を追加。N を書き換えて使用。文字を選んで Ctrl+,（カンマ）でも下付き",
+        "add_superscript": "＋x²",
+        "superscript_help": "上付き：末尾に `^{N}` を追加。N を書き換えて使用。文字を選んで Ctrl+.（ピリオド）でも上付き",
         "change_color": "🎨 色を変更",
         "session_header": "💾 セッション",
         "load_session": "保存した作業を開く (.json)",
@@ -171,12 +182,12 @@ TRANSLATIONS = {
         "color_brown": "Brown/Beige",
         "color_gray": "Black/Gray",
         "label": "Label",
-        "add_italic": "+italic",
-        "italic_help": r"Appends $\it{TEXT}$ at the end. Replace TEXT.",
-        "add_subscript": "+Subscript",
-        "subscript_help": r"Appends $_{N}$ at the end. Replace N.",
-        "add_superscript": "+Superscript",
-        "superscript_help": r"Appends $^{N}$ at the end. Replace N.",
+        "add_italic": "+Italic",
+        "italic_help": "Appends `<i>TEXT</i>`; replace TEXT. Or select text and press Ctrl+I (⌘+I on a Mac).",
+        "add_subscript": "+x₂",
+        "subscript_help": "Subscript: appends `_{N}`; replace N. Or select text and press Ctrl+, (comma).",
+        "add_superscript": "+x²",
+        "superscript_help": "Superscript: appends `^{N}`; replace N. Or select text and press Ctrl+. (period).",
         "change_color": "🎨 Change color",
         "session_header": "💾 Session",
         "load_session": "Open saved project (.json)",
@@ -316,9 +327,12 @@ _COLOR_FAMILY_NAME_KEYS = {
     "gray": "color_gray",
 }
 
-ALL_COLORS = [h for fam in _COLOR_FAMILIES_DATA.values() for h, _ in fam]
-
 st.set_page_config(page_title="XRD Maker", page_icon="🔬", layout="wide")
+# Full-width preview image on old and new Streamlit (use_column_width now shows a warning box).
+_IMAGE_PARAMETERS = inspect.signature(st.image).parameters
+FULL_WIDTH_IMAGE = ({"width": "stretch"} if "int" not in str(_IMAGE_PARAMETERS["width"].annotation)
+                    else {"use_container_width": True} if "use_container_width" in _IMAGE_PARAMETERS
+                    else {"use_column_width": True})
 
 # ===== 言語選択 / Language selection =====
 _lang_option = st.sidebar.radio(
@@ -388,12 +402,8 @@ class RestoredFile:
 
 
 def mpl_to_plotly(text: str) -> str:
-    r"""matplotlib math notation ($_{x}$, $^{x}$, $\it{x}$) → Plotly HTML."""
-    import re
-    text = re.sub(r'\$_\{([^}]+)\}\$', r'<sub>\1</sub>', text)
-    text = re.sub(r'\$\^\{([^}]+)\}\$', r'<sup>\1</sup>', text)
-    text = re.sub(r'\$\\it\{([^}]+)\}\$', r'<i>\1</i>', text)
-    return text
+    r"""Label markup (<i>…</i>, _{…}, ^{…}, and older $\it{x}$, $_{x}$, $^{x}$) → Plotly HTML."""
+    return to_html(text)
 
 
 # ===== ラベル入力（書式ボタン付き） =====
@@ -415,17 +425,17 @@ def label_input(key: str, default: str = "") -> str:
     c1, c2, c3 = st.columns(3)
     if c1.button(T["add_italic"], key=f"_bi_{key}", use_container_width=True,
                  help=T["italic_help"]):
-        st.session_state[val_key] = inp + r"$\it{TEXT}$"
+        st.session_state[val_key] = inp + "<i>TEXT</i>"
         st.session_state[ver_key] += 1
         st.rerun()
     if c2.button(T["add_subscript"], key=f"_bs_{key}", use_container_width=True,
                  help=T["subscript_help"]):
-        st.session_state[val_key] = inp + r"$_{N}$"
+        st.session_state[val_key] = inp + "_{N}"
         st.session_state[ver_key] += 1
         st.rerun()
     if c3.button(T["add_superscript"], key=f"_bp_{key}", use_container_width=True,
                  help=T["superscript_help"]):
-        st.session_state[val_key] = inp + r"$^{N}$"
+        st.session_state[val_key] = inp + "^{N}"
         st.session_state[ver_key] += 1
         st.rerun()
     return st.session_state[val_key]
@@ -585,11 +595,101 @@ def detect_peaks(x, y, prominence=0.1, min_dist_deg=0.5):
     return pks
 
 
+# ===== 色（グラフ描画appと同じ色の組み合わせ） =====
+OTHER_COLOR = "—"
+# The palettes of the graph app, then this app's earlier colour families (kept for earlier figures).
+SWATCH_SETS = OrderedDict([(name, None) for name in PALETTES] +
+                          [(f"xrd:{family}", colors) for family, colors in COLOR_FAMILIES.items()])
+
+
+def swatch_set_label(key):
+    if key in PALETTES:
+        return PALETTE_NAMES[_lang_code][key]
+    return "XRD Maker · " + key.split(":", 1)[1]
+
+
+def named_colors():
+    return load_colors(COLORS_FILE)
+
+
+def _int_or(value, default):
+    return value if type(value) is int else default
+
+
+def palette_items():
+    """Colour keys in display order: [(key, visible)] for measured patterns and for references.
+
+    Uses only session state, so the palette callbacks see the same order as the panel.
+    """
+    state = st.session_state
+    n_xrd = len(state.get("_xrd_pattern_names") or [])
+    patterns = sorted(range(n_xrd), key=lambda i: (_int_or(state.get(f"ord_{i}"), i + 1), i))
+    n_cif = len(state.get("_cif_bytes") or {})
+    refs = ([(_int_or(state.get(f"cord_{i}"), i + 1), f"cif_color_{i}", state.get(f"cvis_{i}", True)) for i in range(n_cif)]
+            + [(_int_or(state.get(f"pord_{i}"), n_cif + i + 1), f"pdf_color_{i}", state.get(f"pvis_{i}", True))
+               for i in range(len(state.get("_pdf_bytes") or {}))])
+    refs.sort(key=lambda item: item[0])
+    return ([(f"xrd_color_{i}", state.get(f"vis_{i}", True) is not False) for i in patterns],
+            [(key, visible is not False) for _, key, visible in refs])
+
+
+def palette_plan():
+    """The palette colour for every pattern and reference key, and the number of items it colours.
+
+    Visible items take the palette in display order (shades spread over them, as the graph
+    app spreads them over its series); hidden ones continue after them. References keep
+    black-then-Okabe–Ito colours unless the palette is applied to them too.
+    """
+    state = st.session_state
+    name = state.get("palette", DEFAULT_PALETTE)
+    name = name if name in PALETTES else DEFAULT_PALETTE
+    reverse, steps = bool(state.get("palette_reverse", False)), _int_or(state.get("palette_steps"), 0)
+    patterns, refs = palette_items()
+    targets = patterns + refs if state.get("palette_refs", False) else patterns
+    visible = [key for key, shown in targets if shown]
+    hidden = [key for key, shown in targets if not shown]
+    plan = {} if state.get("palette_refs", False) else {
+        key: REFERENCE_COLORS[rank % len(REFERENCE_COLORS)] for rank, (key, _) in enumerate(refs)}
+    plan.update(zip(visible, palette_sequence(name, len(visible), reverse, steps)))
+    plan.update(zip(hidden, palette_sequence(name, len(targets), reverse, steps)[len(visible):]))
+    return plan, len(visible)
+
+
+def _apply_palette():
+    """Colour the visible patterns (and references, if chosen) with the chosen palette."""
+    plan, _ = palette_plan()
+    patterns, refs = palette_items()
+    targets = patterns + refs if st.session_state.get("palette_refs", False) else patterns
+    for key, shown in targets:
+        if shown:
+            st.session_state[key] = plan[key]
+    for key in list(st.session_state):
+        if str(key).startswith(("_palview_", "_cname_")):
+            del st.session_state[key]
+
+
+def _set_color(key, value):
+    st.session_state[key] = value
+
+
+def _named_color_chosen(key, name_key):
+    value = named_colors().get(st.session_state.get(name_key))
+    if value:
+        st.session_state[key] = value
+
+
+def swatch_set_colors(set_key, n_items):
+    if set_key in PALETTES:
+        return swatch_colors(set_key, n_items, bool(st.session_state.get("palette_reverse", False)),
+                             _int_or(st.session_state.get("palette_steps"), 0))
+    return [hex_c for hex_c, _ in SWATCH_SETS[set_key]]
+
+
 # ===== カラーポップアップ =====
-def color_picker_popover(key: str, default_hex: str):
-    if key not in st.session_state:
-        st.session_state[key] = default_hex
-    current = st.session_state[key]
+def color_picker_popover(key: str, default_hex: str, n_items: int = 1):
+    """Colour of one pattern or reference: swatches of the graph app's palettes, colours by name, or any colour."""
+    _widget_default(key, default_hex)
+    current = str(st.session_state[key])
 
     st.markdown(
         f'<div style="background:{current};height:20px;border-radius:5px;'
@@ -597,23 +697,35 @@ def color_picker_popover(key: str, default_hex: str):
         unsafe_allow_html=True,
     )
     with st.popover(T["change_color"], use_container_width=True):
-        for family, colors in COLOR_FAMILIES.items():
-            st.caption(family)
-            cols = st.columns(len(colors))
-            for j, (hex_c, name) in enumerate(colors):
-                with cols[j]:
-                    selected = (hex_c == current)
-                    st.markdown(
-                        f'<div style="background:{hex_c};height:24px;border-radius:3px;'
-                        f'border:{"3px solid #333" if selected else "1px solid #ccc"};'
-                        f'margin-bottom:2px"></div>',
-                        unsafe_allow_html=True,
-                    )
-                    if st.button("✓" if selected else " ",
-                                 key=f"{key}_{family}_{j}", help=name,
-                                 use_container_width=True):
-                        st.session_state[key] = hex_c
-                        st.rerun()
+        view_key = f"_palview_{key}"
+        if st.session_state.get(view_key) not in SWATCH_SETS:
+            st.session_state[view_key] = st.session_state.get("palette", DEFAULT_PALETTE)
+        st.selectbox(ui("色の組み合わせ", "Palette"), list(SWATCH_SETS), key=view_key,
+                     format_func=swatch_set_label,
+                     help=ui("上の 8 つはグラフ描画appと同じ色です。濃淡は、色を付けるパターンの数（または「濃淡の段数」）で分けた色です。",
+                             "The first entries are the graph app's colours. Shades are split by the number of coloured patterns (or the shade steps)."))
+        colors = swatch_set_colors(st.session_state[view_key], n_items)
+        cols = st.columns(len(colors))
+        for j, hex_c in enumerate(colors):
+            with cols[j]:
+                selected = hex_c.lower() == current.lower()
+                st.markdown(
+                    f'<div style="background:{hex_c};height:24px;border-radius:3px;'
+                    f'border:{"3px solid #333" if selected else "1px solid #ccc"};'
+                    f'margin-bottom:2px"></div>',
+                    unsafe_allow_html=True,
+                )
+                st.button("✓" if selected else " ", key=f"{key}_sw_{j}", help=hex_c.upper(),
+                          use_container_width=True, on_click=_set_color, args=(key, hex_c))
+        names = named_colors()
+        name_key = f"_cname_{key}"
+        st.session_state[name_key] = next((n for n, h in names.items() if h.lower() == current.lower()), OTHER_COLOR)
+        st.selectbox(ui("名前で選ぶ", "By name"), [OTHER_COLOR] + list(names), key=name_key,
+                     on_change=_named_color_chosen, args=(key, name_key),
+                     format_func=lambda n: n if n == OTHER_COLOR else f"{color_emoji(names[n])} {n}  {names[n]}",
+                     help=ui("colors.csv の色（グラフ描画appと同じ書式「名前,#RRGGBB」）。グラフ描画appの colors.csv をこのアプリのフォルダに置くと、同じ名前の色を選べます。",
+                             "Colours from colors.csv (the graph app's format, name,#RRGGBB). Put the graph app's colors.csv in this app's folder to share its names."))
+        st.color_picker(ui("自由に選ぶ", "Any colour"), key=key)
     return st.session_state[key]
 
 
@@ -640,7 +752,7 @@ def restore_session(json_bytes: bytes):
     project = decode_project(json_bytes)
     for key in list(st.session_state):
         if (key in GLOBAL_KEYS or PATTERN_KEY.fullmatch(key)
-                or re.fullmatch(r"_(?:inp|ver)_(?:lbl|clbl|plbl)_.*", key)):
+                or re.fullmatch(r"_(?:inp|ver)_(?:lbl|clbl|plbl)_.*|_(?:palview|cname)_.*", key)):
             del st.session_state[key]
     for kind in ("xrd", "cif", "pdf"):
         st.session_state[f"_{kind}_bytes"] = project[f"{kind}_files"]
@@ -685,14 +797,24 @@ def _open_style_template():
 
 
 def _apply_figure_preset():
-    preset = FIGURE_PRESETS_MM.get(st.session_state["figure_preset"])
+    name = st.session_state["figure_preset"]
+    preset = FIGURE_PRESETS_MM.get(name)
     if preset:
         st.session_state["fig_width"], st.session_state["fig_height"] = map(mm_to_inches, preset)
-        compact = st.session_state["figure_preset"] == "single"
-        st.session_state.update(font_size=9 if compact else 11,
-            label_fontsize=8 if compact else 10, cif_label_fontsize=7 if compact else 8,
-            annotation_font_size=6 if compact else 7,
-            margin_left=.16 if compact else .12, margin_bottom=.22 if compact else .15)
+        if name == "figapp":
+            # The graph app's defaults: Arial 7 pt labels, 6.5 pt ticks and legend, 0.5 pt axes, 0.9 pt lines.
+            st.session_state.update(font_family="Arial", font_size=7.0, tick_font_size=6.5, legend_font_size=6.5,
+                label_fontsize=7, cif_label_fontsize=6, annotation_font_size=6,
+                line_width=0.9, reference_line_width=0.6, axes_line_width=0.5, tick_length=2.5, tick_direction="out",
+                axes_box=False,
+                margin_left=.06, margin_right=.98, margin_bottom=.14, margin_top=.98)
+        else:
+            compact = name == "single"
+            size = 9.0 if compact else 11.0
+            st.session_state.update(font_size=size, tick_font_size=size, legend_font_size=size,
+                label_fontsize=8 if compact else 10, cif_label_fontsize=7 if compact else 8,
+                annotation_font_size=6 if compact else 7,
+                margin_left=.16 if compact else .12, margin_bottom=.22 if compact else .15)
     st.session_state.pop("_size_signature", None)
 
 
@@ -710,7 +832,7 @@ def _update_margin(key):
 def _new_project():
     for key in list(st.session_state):
         if ((key in GLOBAL_KEYS and key != "lang_radio") or PATTERN_KEY.fullmatch(key)
-                or re.fullmatch(r"_(?:inp|ver)_(?:lbl|clbl|plbl)_.*", key)):
+                or re.fullmatch(r"_(?:inp|ver)_(?:lbl|clbl|plbl)_.*|_(?:palview|cname)_.*", key)):
             del st.session_state[key]
     for kind in ("xrd", "cif", "pdf"):
         st.session_state[f"_{kind}_bytes"] = {}
@@ -766,7 +888,7 @@ def _remap_file_session_state(old_names: list, new_names: list, key_tmpls: list)
 
 # ===== サイドバー =====
 
-st.sidebar.caption("Last updated: 2026-10-23")
+st.sidebar.caption("Last updated: 2026-10-26")
 st.sidebar.header(T["session_header"])
 st.sidebar.caption(T["project_help"])
 session_upload = st.sidebar.file_uploader(
@@ -875,6 +997,21 @@ show_minor  = st.sidebar.checkbox(T["show_minor_cb"], value=_widget_default('sho
 minor_tick  = st.sidebar.number_input(T["minor_tick"], min_value=0.5, max_value=10.0,
                                        value=_widget_default('minor_tick', 2.0, number=True), step=0.5, key="minor_tick") if show_minor else None
 
+st.sidebar.subheader(ui("軸のラベル", "Axis labels"))
+_axis_label_help = ui(
+    "グラフ描画appと同じ書き方です。文字を選んで Ctrl+I で斜体、Ctrl+B で太字、Ctrl+,（カンマ）で下付き、"
+    "Ctrl+.（ピリオド）で上付き（Mac は ⌘ でも可）。入力欄では `<i>θ</i>`、`_{2}`、`^{3+}` のような記号で出て、"
+    "Enter で図に反映されます。直接書いても同じです。空欄にするとラベルを出しません。",
+    "Same markup as the graph app. Select text and press Ctrl+I for italic, Ctrl+B bold, Ctrl+, (comma) subscript, "
+    "Ctrl+. (period) superscript (⌘ on a Mac). The box shows codes such as `<i>θ</i>`, `_{2}`, `^{3+}`; press Enter "
+    "to update the figure. Typing them works too. Leave empty for no label.")
+_widget_default("x_label", DEFAULT_X_LABEL)
+_widget_default("y_label", DEFAULT_Y_LABEL)
+x_title = st.sidebar.text_input(ui("横軸", "x axis"), key="x_label", help=_axis_label_help)
+y_title = st.sidebar.text_input(ui("縦軸", "y axis"), key="y_label", help=_axis_label_help)
+st.sidebar.caption(ui("例：`2<i>θ</i> (°)`、`Yb_{2}Si_{2}O_{7}`、`cm^-1`。試料・リファレンスのラベルも同じ書き方です。",
+                      "e.g. `2<i>θ</i> (°)`, `Yb_{2}Si_{2}O_{7}`, `cm^-1`. Sample and reference labels use the same markup."))
+
 # 左/右 の内部値は言語に関わらず固定し、format_func で表示を翻訳する
 _LR_OPTIONS = ["左", "右"]
 _lr_fmt = lambda x: T["left"] if x == "左" else T["right"]
@@ -915,9 +1052,11 @@ st.session_state.setdefault("fig_height", 8.0)
 st.sidebar.selectbox(ui("論文図のひな形", "Publication figure preset"), list(FIGURE_PRESETS_MM),
     format_func=lambda key: {"custom": ui("自由指定", "Custom"),
         "single": ui("1段幅の例 · 85 × 70 mm", "Single column example · 85 × 70 mm"),
-        "double": ui("2段幅の例 · 180 × 120 mm", "Double column example · 180 × 120 mm")}[key],
+        "double": ui("2段幅の例 · 180 × 120 mm", "Double column example · 180 × 120 mm"),
+        "figapp": ui("グラフ描画appと同じ体裁 · 88 × 70 mm", "Graph app look · 88 × 70 mm")}[key],
     key="figure_preset", on_change=_apply_figure_preset)
-st.sidebar.caption(ui("ひな形は寸法・文字サイズ・下と左の余白を設定します。投稿先の指定に合わせて調整してください。", "Presets set dimensions, font sizes, and bottom/left margins. Adjust them to your journal's requirements."))
+st.sidebar.caption(ui("ひな形は寸法・文字サイズ・余白を設定します。「グラフ描画appと同じ体裁」は Arial 7 pt・目盛り 6.5 pt・細い線で、グラフ描画appの図と並べられます。投稿先の指定に合わせて調整してください。",
+                      "Presets set dimensions, font sizes and margins. 'Graph app look' uses Arial 7 pt, 6.5 pt ticks and thin lines to sit next to the graph app's figures. Adjust them to your journal's requirements."))
 size_unit = st.sidebar.radio(ui("寸法の単位", "Size unit"), ["mm", "inch"], horizontal=True, key="size_unit")
 _signature = (size_unit, st.session_state["fig_width"], st.session_state["fig_height"])
 if st.session_state.get("_size_signature") != _signature:
@@ -931,16 +1070,44 @@ for _axis, _label in (("width", ui("図の幅", "Figure width")), ("height", ui(
         format="%.2f", key=f"_figure_{_axis}", on_change=_update_figure_dimension, args=(_axis,))
 fig_width, fig_height = st.session_state["fig_width"], st.session_state["fig_height"]
 dpi_export = st.sidebar.selectbox("Output DPI", [300, 600], index=0, key="dpi_export")
-font_size  = st.sidebar.slider(T["font_size"], 6, 28, _widget_default('font_size', 14), key="font_size")
+# Older projects store an integer size for everything; ticks and legend start from it.
+st.session_state["font_size"] = float(st.session_state.get("font_size") or 14.0)
+for _key in ("tick_font_size", "legend_font_size"):
+    st.session_state[_key] = float(st.session_state.get(_key) or st.session_state["font_size"])
+st.sidebar.caption(ui("文字の大きさ (pt)", "Text sizes (pt)"))
+_size_columns = st.sidebar.columns(3)
+for _column, _key, _label in ((_size_columns[0], "font_size", ui("軸ラベル", "Axis labels")),
+                              (_size_columns[1], "tick_font_size", ui("目盛り", "Ticks")),
+                              (_size_columns[2], "legend_font_size", ui("凡例", "Legend"))):
+    _column.number_input(_label, min_value=4.0, max_value=28.0, step=0.5, format="%.1f", key=_key)
+font_size = st.session_state["font_size"]
+tick_font_size = st.session_state["tick_font_size"]
+legend_font_size = st.session_state["legend_font_size"]
 with st.sidebar.expander(ui("線・フォント・余白", "Lines, fonts and margins")):
-    st.selectbox(ui("フォント", "Font family"), ["Arial", "DejaVu Sans", "Times New Roman"], key="font_family")
+    st.selectbox(ui("フォント", "Font family"), list(FONT_FAMILIES), key="font_family",
+                 help=ui("グラフ描画appと同じ選択肢です。斜体・下付き・上付きも同じ書体で描きます。",
+                         "The graph app's choices. Italics, subscripts and superscripts use the same font."))
     _actual_font = resolve_font(st.session_state["font_family"])
     if _actual_font != st.session_state["font_family"]:
-        st.caption(ui(f"この環境では {_actual_font} を使用します。", f"This environment uses {_actual_font}."))
+        if _actual_font in METRIC_COMPATIBLE.get(st.session_state["font_family"], ()):
+            st.caption(ui(f"この環境には {st.session_state['font_family']} がないため、字幅が同じ {_actual_font} で描きます。"
+                          f"SVG には {st.session_state['font_family']} と書き込むので、手元で開けば {st.session_state['font_family']} になります。",
+                          f"{st.session_state['font_family']} is not installed here, so {_actual_font} (same character widths) is used. "
+                          f"SVG files name {st.session_state['font_family']}, so they open in it on your computer."))
+        else:
+            st.caption(ui(f"この環境では {_actual_font} を使用します。", f"This environment uses {_actual_font}."))
     for _key, _label in (("line_width", ui("測定曲線の線幅 (pt)", "Pattern line width (pt)")),
                         ("reference_line_width", ui("リファレンスの線幅 (pt)", "Reference line width (pt)")),
                         ("axes_line_width", ui("軸・目盛りの線幅 (pt)", "Axes and tick width (pt)"))):
         st.number_input(_label, .1, 5., step=.1, key=_key)
+    st.number_input(ui("目盛りの長さ (pt)", "Tick length (pt)"), .5, 10., step=.5, key="tick_length",
+                    help=ui("主目盛りの長さ。副目盛りはその半分です。", "Major tick length; minor ticks are half as long."))
+    st.selectbox(ui("目盛りの向き", "Tick direction"), ["auto", "in", "out"], key="tick_direction",
+                 format_func=lambda value: {"auto": ui("これまでどおり（リファレンスの軸は外向き）", "As before (outward on the reference axis)"),
+                                            "in": ui("内向き", "Inward"), "out": ui("外向き", "Outward")}[value],
+                 help=ui("下の軸の目盛りの向き。メインとリファレンスの境目の目盛りは、棒と重ならないように内向きのままです。",
+                         "Direction of the bottom axis ticks. Ticks between the main and reference panels stay inward to avoid the sticks."))
+    st.checkbox(ui("上と右の枠線を描く", "Draw the top and right frame"), key="axes_box")
     for _key, _label in (("margin_left", ui("左余白 (%)", "Left margin (%)")),
                         ("margin_right", ui("右余白 (%)", "Right margin (%)")),
                         ("margin_bottom", ui("下余白 (%)", "Bottom margin (%)")),
@@ -1003,14 +1170,42 @@ if active_xrd:
     pdf_orders, pdf_visibles, pdf_labels, pdf_colors, pdf_ref_lines = [], [], [], [], []
     pdf_sort_idx = []
 
+    for _key, _value in (("palette", DEFAULT_PALETTE), ("palette_reverse", False),
+                         ("palette_refs", False), ("palette_steps", 0)):
+        st.session_state.setdefault(_key, _value)
+    if st.session_state["palette"] not in PALETTES:
+        st.session_state["palette"] = DEFAULT_PALETTE
+    palette_defaults, palette_count = palette_plan()
+
     if show_panel and col_settings is not None:
         with col_settings:
             with st.container(height=700):
 
+                st.markdown(ui("#### 色", "#### Colours"))
+                st.selectbox(ui("色の組み合わせ", "Palette"), list(PALETTES), key="palette",
+                    format_func=lambda key: PALETTE_NAMES[_lang_code][key], on_change=_apply_palette,
+                    help=ui("グラフ描画appと同じ色の組み合わせです。選ぶと、表示中のパターンに表示順で色が付きます。",
+                            "The graph app's palettes. Choosing one colours the visible patterns in display order."))
+                st.checkbox(ui("濃淡（色の順）を逆に", "Reverse shades"), key="palette_reverse", on_change=_apply_palette,
+                    help=ui("「…の濃淡」では 1 つ目のパターンが濃い色になります。ほかの組み合わせでは色の順が逆になります。",
+                            "With shades, the first pattern gets the dark one; other palettes reverse the order."))
+                st.checkbox(ui("リファレンスにも当てはめる", "Apply to references too"), key="palette_refs", on_change=_apply_palette,
+                    help=ui("CIF・PDFカードにも、パターンの続きで色を付けます。付けないときは黒から始まる色です。",
+                            "Colour the CIF and PDF-card references too, after the patterns. Otherwise they start in black."))
+                _pc1, _pc2 = st.columns([0.45, 0.55])
+                _pc1.number_input(ui("濃淡の段数", "Shade steps"), min_value=0, max_value=MAX_SHADE_STEPS, step=1,
+                    key="palette_steps", on_change=_apply_palette,
+                    help=ui("0 はパターンの数で分けます。グラフ描画appの図と系列の数が違うときは、その系列の数を入れると同じ濃さになります（濃淡と viridis）。",
+                            "0 splits the shades by the number of patterns. Enter the number of series of a graph-app figure to get its exact shades (shades and viridis)."))
+                _pc2.markdown('<div style="height:1.75rem"></div>', unsafe_allow_html=True)
+                _pc2.button(ui("色を当てはめ直す", "Re-apply"), on_click=_apply_palette, use_container_width=True,
+                    help=ui("パターンごとに変えた色を戻すときや、表示順・表示を変えたあとに押します。",
+                            "Restores the palette after changing single colours, the display order or visibility."))
+
                 st.markdown(T["xrd_patterns"])
                 for i, f in enumerate(active_xrd):
                     default_name = os.path.splitext(f.name)[0]
-                    default_hex  = ALL_COLORS[i % len(ALL_COLORS)]
+                    default_hex  = palette_defaults.get(f"xrd_color_{i}", REFERENCE_COLORS[0])
 
                     with st.expander(f"**{i+1}. {default_name}**", expanded=True):
                         order = st.number_input(
@@ -1019,7 +1214,7 @@ if active_xrd:
                         )
                         visible = st.checkbox(T["show_cb"], value=_widget_default(f'vis_{i}', True, checkbox=True), key=f"vis_{i}")
                         label   = label_input(key=f"lbl_{i}", default=default_name)
-                        chosen_color = color_picker_popover(f"xrd_color_{i}", default_hex)
+                        chosen_color = color_picker_popover(f"xrd_color_{i}", default_hex, palette_count)
 
                         if normalize:
                             eoff_key = f"extra_offset_{i}"
@@ -1055,7 +1250,7 @@ if active_xrd:
                     for i, f in enumerate(active_cif):
                         file_stem    = os.path.splitext(f.name)[0]
                         smart_label  = extract_cif_label(f.read()) or file_stem
-                        default_hex  = ALL_COLORS[(n_xrd + i) % len(ALL_COLORS)]
+                        default_hex  = palette_defaults.get(f"cif_color_{i}", REFERENCE_COLORS[0])
 
                         with st.expander(f"**CIF {i+1}. {file_stem}**", expanded=True):
                             order   = st.number_input(
@@ -1064,7 +1259,7 @@ if active_xrd:
                             )
                             visible = st.checkbox(T["show_cb"], value=_widget_default(f'cvis_{i}', True, checkbox=True), key=f"cvis_{i}")
                             label   = label_input(key=f"clbl_{i}", default=smart_label)
-                            chosen_color = color_picker_popover(f"cif_color_{i}", default_hex)
+                            chosen_color = color_picker_popover(f"cif_color_{i}", default_hex, palette_count)
                             if show_ref_lines:
                                 ref_line = st.checkbox(T["show_ref_line_each"], value=_widget_default(f'cref_line_{i}', True, checkbox=True), key=f"cref_line_{i}")
                             else:
@@ -1084,7 +1279,7 @@ if active_xrd:
                     for i, f in enumerate(active_pdf):
                         file_stem   = os.path.splitext(f.name)[0]
                         smart_label = extract_pdf_card_label(f.read()) or file_stem
-                        default_hex = ALL_COLORS[(n_offset + i) % len(ALL_COLORS)]
+                        default_hex = palette_defaults.get(f"pdf_color_{i}", REFERENCE_COLORS[0])
 
                         with st.expander(f"**PDF {i+1}. {file_stem}**", expanded=True):
                             order   = st.number_input(
@@ -1093,7 +1288,7 @@ if active_xrd:
                             )
                             visible = st.checkbox(T["show_cb"], value=_widget_default(f'pvis_{i}', True, checkbox=True), key=f"pvis_{i}")
                             label   = label_input(key=f"plbl_{i}", default=smart_label)
-                            chosen_color = color_picker_popover(f"pdf_color_{i}", default_hex)
+                            chosen_color = color_picker_popover(f"pdf_color_{i}", default_hex, palette_count)
                             if show_ref_lines:
                                 ref_line = st.checkbox(T["show_ref_line_each"], value=_widget_default(f'pref_line_{i}', True, checkbox=True), key=f"pref_line_{i}")
                             else:
@@ -1113,7 +1308,7 @@ if active_xrd:
             orders.append(st.session_state.get(f"ord_{i}", i + 1))
             visibles.append(st.session_state.get(f"vis_{i}", True))
             labels.append(st.session_state.get(f"_val_lbl_{i}", os.path.splitext(f.name)[0]))
-            colors_sel.append(st.session_state.get(key, ALL_COLORS[i % len(ALL_COLORS)]))
+            colors_sel.append(st.session_state.get(key, palette_defaults.get(key, REFERENCE_COLORS[0])))
             if normalize:
                 eoff_key = f"extra_offset_{i}"
                 if eoff_key not in st.session_state:
@@ -1130,7 +1325,7 @@ if active_xrd:
                 cif_orders.append(st.session_state.get(f"cord_{i}", i + 1))
                 cif_visibles.append(st.session_state.get(f"cvis_{i}", True))
                 cif_labels.append(st.session_state.get(f"_val_clbl_{i}", fallback))
-                cif_colors.append(st.session_state.get(key, ALL_COLORS[(n_xrd + i) % len(ALL_COLORS)]))
+                cif_colors.append(st.session_state.get(key, palette_defaults.get(key, REFERENCE_COLORS[0])))
                 cif_ref_lines.append(st.session_state.get(f"cref_line_{i}", True))
             cif_sort_idx = sorted(range(len(active_cif)), key=lambda i: cif_orders[i])
 
@@ -1142,7 +1337,7 @@ if active_xrd:
                 pdf_orders.append(st.session_state.get(f"pord_{i}", len(active_cif) + i + 1))
                 pdf_visibles.append(st.session_state.get(f"pvis_{i}", True))
                 pdf_labels.append(st.session_state.get(f"_val_plbl_{i}", fallback))
-                pdf_colors.append(st.session_state.get(key, ALL_COLORS[(n_offset + i) % len(ALL_COLORS)]))
+                pdf_colors.append(st.session_state.get(key, palette_defaults.get(key, REFERENCE_COLORS[0])))
                 pdf_ref_lines.append(st.session_state.get(f"pref_line_{i}", True))
             pdf_sort_idx = sorted(range(len(active_pdf)), key=lambda i: pdf_orders[i])
 
@@ -1197,7 +1392,16 @@ if active_xrd:
         has_ref = bool(refs)
         has_xrd = bool(active_xrd) and any(visibles)
 
-        plt.rcParams.update({**font_rcparams(plot_style), "font.size": font_size})
+        plt.rcParams.update({**font_rcparams(plot_style), "font.size": font_size, "axes.labelsize": font_size,
+                             "xtick.labelsize": tick_font_size, "ytick.labelsize": tick_font_size,
+                             "legend.fontsize": legend_font_size, "legend.title_fontsize": legend_font_size})
+        major_len, minor_len = plot_style["tick_length"], plot_style["tick_length"] / 2
+        # Ticks of the bottom axis; between the main and reference panels they stay inward,
+        # so they do not run into the reference sticks.
+        bottom_dir = plot_style["tick_direction"]
+        if bottom_dir == "auto":
+            bottom_dir = "out" if has_ref else "in"
+        main_dir = "in" if has_ref else bottom_dir
 
         gs = None
         if has_ref:
@@ -1213,10 +1417,15 @@ if active_xrd:
             ax_ref = None
 
         ax_main.xaxis.set_major_locator(MultipleLocator(major_tick))
-        ax_main.tick_params(which="major", axis="x", length=5, direction="in")
+        ax_main.tick_params(which="major", axis="x", length=major_len, direction=main_dir)
         if show_minor and minor_tick:
             ax_main.xaxis.set_minor_locator(MultipleLocator(minor_tick))
-            ax_main.tick_params(which="minor", axis="x", length=2.5, direction="in")
+            ax_main.tick_params(which="minor", axis="x", length=minor_len, direction=main_dir)
+        if not plot_style["axes_box"]:
+            ax_main.spines["top"].set_visible(False)
+            ax_main.spines["right"].set_visible(False)
+            if ax_ref is not None:
+                ax_ref.spines["right"].set_visible(False)
 
         cumulative_y = 0.0
         side_labels  = []
@@ -1253,8 +1462,8 @@ if active_xrd:
                     y_plot = y + abs_offsets[i]
                     side_labels.append((abs_offsets[i] + y_min + label_offset_y * (y_max - y_min), colors_sel[i], labels[i]))
 
-                ax_main.plot(x, y_plot, color=colors_sel[i], linewidth=plot_style["line_width"], label=labels[i])
-                prepared_curves.append(PreparedCurve(labels[i], x, y_plot, colors_sel[i], plot_style["line_width"]))
+                ax_main.plot(x, y_plot, color=colors_sel[i], linewidth=plot_style["line_width"], label=rich(labels[i]))
+                prepared_curves.append(PreparedCurve(rich(labels[i]), x, y_plot, colors_sel[i], plot_style["line_width"]))
 
                 if show_peaks:
                     pks = detect_peaks(x, y, prominence=peak_prom)
@@ -1277,18 +1486,18 @@ if active_xrd:
                     x_pos = x_max - label_offset_x
                     ha    = "right"
                 ax_main.text(
-                    x_pos, y_c, txt,
+                    x_pos, y_c, rich(txt),
                     color=col, fontsize=label_fontsize,
                     ha=ha, va="center",
                     bbox=dict(fc="white", ec="none", alpha=0.6, pad=1),
                 )
 
-        ax_main.set_ylabel("Intensity (a.u.)")
+        ax_main.set_ylabel(rich(y_title))
         ax_main.set_yticks([])
         if show_legend:
             ax_main.legend(loc="upper right", frameon=False)
 
-        xlabel = r"Diffraction angle, 2$\it{\theta}$ (deg.)"
+        xlabel = rich(x_title)
         if ax_ref is None:
             ax_main.set_xlabel(xlabel)
         else:
@@ -1305,14 +1514,14 @@ if active_xrd:
                     continue
                 baseline = row * row_height
                 y_norm = y_ref / np.max(y_ref) * bar_height if np.max(y_ref) > 0 else y_ref
-                reference = ReferencePeaks(ref["label"], x_ref, y_ref, hkls, ref["color"],
+                reference = ReferencePeaks(rich(ref["label"]), x_ref, y_ref, hkls, ref["color"],
                                            ["circle", "triangle", "square", "diamond"][row % 4])
                 phase_refs.append(reference)
                 if row > 0:
                     ax_ref.axhline(y=baseline, color="gray", linewidth=0.6,
                                    linestyle="-", alpha=0.5, zorder=0)
                 ax_ref.vlines(x_ref, baseline, baseline + y_norm,
-                              color=ref["color"], linewidth=plot_style["reference_line_width"], label=ref["label"])
+                              color=ref["color"], linewidth=plot_style["reference_line_width"], label=rich(ref["label"]))
                 if show_hkl and hkls:
                     add_mpl_reference_hkl_labels(ax_ref, reference, baseline=baseline,
                         scale=bar_height / np.max(y_ref) if np.max(y_ref) > 0 else 1., font_size=annotation_font_size)
@@ -1327,7 +1536,7 @@ if active_xrd:
                     lha = "left" if cif_label_side == "左" else "right"
                     ax_ref.text(
                         lx, baseline + cif_label_offset_y * row_height,
-                        (["○ ", "△ ", "□ ", "◇ "][row % 4] if show_phase_markers else "") + ref["label"], fontsize=cif_label_fontsize,
+                        (["○ ", "△ ", "□ ", "◇ "][row % 4] if show_phase_markers else "") + rich(ref["label"]), fontsize=cif_label_fontsize,
                         color=ref["color"], va="center", ha=lha,
                     )
                 row += 1
@@ -1337,10 +1546,10 @@ if active_xrd:
             ax_ref.set_yticks([])
             ax_ref.set_ylim(0, row * row_height)
             ax_ref.xaxis.set_major_locator(MultipleLocator(major_tick))
-            ax_ref.tick_params(which="major", axis="x", length=5, direction="out")
+            ax_ref.tick_params(which="major", axis="x", length=major_len, direction=bottom_dir)
             if show_minor and minor_tick:
                 ax_ref.xaxis.set_minor_locator(MultipleLocator(minor_tick))
-                ax_ref.tick_params(which="minor", axis="x", length=2.5, direction="out")
+                ax_ref.tick_params(which="minor", axis="x", length=minor_len, direction=bottom_dir)
 
         ax_main.set_xlim(x_min, x_max)
         apply_mpl_style(fig, plot_style)
@@ -1403,7 +1612,7 @@ if active_xrd:
                 line=dict(color=colors_sel[i], width=plot_style["line_width"] * 4 / 3),
                 mode="lines", showlegend=show_legend,
             ), row=1, col=1)
-            prepared_curves.append(PreparedCurve(labels[i], x, y_plot, colors_sel[i], plot_style["line_width"]))
+            prepared_curves.append(PreparedCurve(mpl_to_plotly(labels[i]), x, y_plot, colors_sel[i], plot_style["line_width"]))
 
             if show_peaks:
                 pks = detect_peaks(x, y, prominence=peak_prom)
@@ -1426,7 +1635,7 @@ if active_xrd:
                     mode="text",
                     text=[mpl_to_plotly(labels[i])],
                     textposition=textpos,
-                    textfont=dict(color=colors_sel[i], size=label_fontsize, family=resolve_font(plot_style["font_family"])),
+                    textfont=dict(color=colors_sel[i], size=label_fontsize, family=css_font_stack(plot_style["font_family"])),
                     showlegend=False,
                     hoverinfo="skip",
                 ), row=1, col=1)
@@ -1442,7 +1651,7 @@ if active_xrd:
                     continue
                 baseline = row * row_height
                 y_norm = y_ref / np.max(y_ref) * bar_height if np.max(y_ref) > 0 else y_ref
-                reference = ReferencePeaks(ref["label"], x_ref, y_ref, hkls, ref["color"],
+                reference = ReferencePeaks(mpl_to_plotly(ref["label"]), x_ref, y_ref, hkls, ref["color"],
                                            ["circle", "triangle", "square", "diamond"][row % 4])
                 phase_refs.append(reference)
                 vx, vy = [], []
@@ -1479,7 +1688,7 @@ if active_xrd:
                         mode="text",
                         text=[(["○ ", "△ ", "□ ", "◇ "][row % 4] if show_phase_markers else "") + mpl_to_plotly(ref["label"])],
                         textposition=textpos_cif,
-                        textfont=dict(color=ref["color"], size=cif_label_fontsize, family=resolve_font(plot_style["font_family"])),
+                        textfont=dict(color=ref["color"], size=cif_label_fontsize, family=css_font_stack(plot_style["font_family"])),
                         showlegend=False,
                         hoverinfo="skip",
                     ), row=2, col=1)
@@ -1490,22 +1699,27 @@ if active_xrd:
                 showgrid=False, zeroline=False,
             ))
 
-        xlabel = "Diffraction angle, 2<i>θ</i> (deg.)"
-        minor_cfg = dict(ticks="inside", dtick=minor_tick, showgrid=False) if (show_minor and minor_tick) else {}
+        xlabel = mpl_to_plotly(x_title)
+        tick_px = plot_style["tick_length"] * 4 / 3
+        bottom_ticks = {"in": "inside", "out": "outside"}.get(plot_style["tick_direction"],
+                                                             "outside" if has_ref else "inside")
+        main_ticks = "inside" if has_ref else bottom_ticks
+        minor_cfg = (dict(ticks=main_ticks, dtick=minor_tick, ticklen=tick_px / 2, showgrid=False)
+                     if (show_minor and minor_tick) else {})
         pfig.update_xaxes(
-            range=[x_min, x_max], dtick=major_tick, ticks="inside",
-            showline=True, linecolor="black", mirror=False,
+            range=[x_min, x_max], dtick=major_tick, ticks=main_ticks, ticklen=tick_px,
+            showline=True, linecolor="black", mirror=plot_style["axes_box"],
             showgrid=False, zeroline=False,
-            tickfont=dict(color="black", size=font_size),
+            tickfont=dict(color="black", size=tick_font_size),
             title_font=dict(color="black", size=font_size),
             minor=minor_cfg,
         )
         if has_ref:
-            pfig.update_xaxes(ticks="outside", row=2, col=1)
+            pfig.update_xaxes(ticks=bottom_ticks, row=2, col=1)
             if show_minor and minor_tick:
-                pfig.update_xaxes(minor=dict(ticks="outside", dtick=minor_tick), row=2, col=1)
+                pfig.update_xaxes(minor=dict(ticks=bottom_ticks, dtick=minor_tick, ticklen=tick_px / 2), row=2, col=1)
         pfig.update_yaxes(
-            showticklabels=False, showline=True, linecolor="black",
+            showticklabels=False, showline=True, linecolor="black", mirror=plot_style["axes_box"],
             showgrid=False, zeroline=False,
             title_font=dict(color="black", size=font_size),
         )
@@ -1513,20 +1727,20 @@ if active_xrd:
         if has_ref:
             pfig.update_xaxes(title_text=xlabel, row=2, col=1)
             pfig.update_xaxes(showticklabels=False, row=1, col=1)
-            pfig.update_yaxes(title_text="Intensity (a.u.)", row=1, col=1)
+            pfig.update_yaxes(title_text=mpl_to_plotly(y_title), row=1, col=1)
         else:
             pfig.update_xaxes(title_text=xlabel, row=1, col=1)
-            pfig.update_yaxes(title_text="Intensity (a.u.)", row=1, col=1)
+            pfig.update_yaxes(title_text=mpl_to_plotly(y_title), row=1, col=1)
 
         pfig.update_layout(
             dragmode="zoom",
-            font=dict(family=resolve_font(plot_style["font_family"]), size=font_size, color="black"),
+            font=dict(family=css_font_stack(plot_style["font_family"]), size=font_size, color="black"),
             height=max(320, min(1800, int(fig_height * 96))),
             plot_bgcolor="rgba(255,255,255,0)" if plot_style["transparent_background"] else "white",
             paper_bgcolor="rgba(255,255,255,0)" if plot_style["transparent_background"] else "white",
             showlegend=show_legend or show_cif_legend,
             legend=dict(x=1.0, y=1.0, xanchor="right", yanchor="top",
-                        font=dict(color="black")),
+                        font=dict(color="black", size=legend_font_size)),
             margin=dict(l=int(fig_width * 96 * plot_style["margin_left"]),
                         r=int(fig_width * 96 * (1 - plot_style["margin_right"])),
                         t=int(fig_height * 96 * (1 - plot_style["margin_top"])),
@@ -1567,7 +1781,7 @@ if active_xrd:
         plt.close(fig)
 
         with export_tab:
-            st.image(png_bytes, use_column_width=True)
+            st.image(png_bytes, **FULL_WIDTH_IMAGE)
             st.caption(T["export_preview_caption"].format(
                 width=inches_to_mm(fig_width), height=inches_to_mm(fig_height), dpi=dpi_export,
             ))
@@ -1640,3 +1854,44 @@ try:
     st.sidebar.caption(T["desktop_help"])
 except (ImportError, FileNotFoundError):
     pass
+
+# ===== 書式のショートカット（グラフ描画appと同じ） =====
+# 入力欄の文字を選んで Ctrl+I（斜体）・Ctrl+B（太字）・Ctrl+,（下付き）・Ctrl+.（上付き）。Word の Ctrl+= / Ctrl+Shift+= も。
+# Mac は ⌘ でも可。<i>…</i>、<b>…</b>、_{…}、^{…} を書き足すだけなので、保存される作業ファイルはどの版でも同じ。
+_SHORTCUTS_HTML = """<script>
+(function () {
+  const P = window.parent;
+  if (!P || !P.document) return;
+  const handler = function (e) {
+    const el = e.target;
+    if (!el || !(el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && (el.type === 'text' || !el.type)))) return;
+    if (el.getAttribute('role') === 'combobox' || (el.closest && el.closest('[data-baseweb="select"]'))) return;
+    if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+    const k = e.key;
+    let open = null, close = null;
+    if (k === 'i' || k === 'I') { open = '<i>'; close = '</i>'; }
+    else if (k === 'b' || k === 'B') { open = '<b>'; close = '</b>'; }
+    else if (k === ',' || k === '=') { open = '_{'; close = '}'; }
+    else if (k === '.' || k === '+') { open = '^{'; close = '}'; }
+    if (!open) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const v = el.value || '';
+    const a = (el.selectionStart == null) ? v.length : el.selectionStart;
+    const b = (el.selectionEnd == null) ? a : el.selectionEnd;
+    const nv = v.slice(0, a) + open + v.slice(a, b) + close + v.slice(b);
+    const proto = el.tagName === 'TEXTAREA' ? P.HTMLTextAreaElement.prototype : P.HTMLInputElement.prototype;
+    Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, nv);
+    el.dispatchEvent(new P.Event('input', { bubbles: true }));
+    el.setSelectionRange(a + open.length, b + open.length);
+  };
+  if (P.__xrdMakerKeys) P.document.removeEventListener('keydown', P.__xrdMakerKeys, true);
+  P.__xrdMakerKeys = handler;
+  P.document.addEventListener('keydown', handler, true);
+})();
+</script>"""
+if hasattr(st, "iframe"):     # newer Streamlit, where components.html is being removed
+    st.iframe(_SHORTCUTS_HTML, height="content")
+else:                         # Streamlit 1.32 and other versions before st.iframe
+    import streamlit.components.v1 as components
+    components.html(_SHORTCUTS_HTML, height=0)

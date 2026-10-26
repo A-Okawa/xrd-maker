@@ -12,7 +12,7 @@ import zipfile
 
 BUNDLE_FILES = (
     "app.py", "requirements.txt", "xrd_io.py", "project_io.py", "figure_style.py",
-    "plot_annotations.py", "style_templates.py",
+    "plot_annotations.py", "style_templates.py", "palettes.py", "rich_text.py", "colors.csv",
     "desktop.py", "setup_local.py", "build_bundle.py", "README_OFFLINE.md",
     "setup_mac.command", "launch_mac.command", "setup_linux.sh", "launch_linux.sh",
     "setup_windows.bat", "launch_windows.bat",

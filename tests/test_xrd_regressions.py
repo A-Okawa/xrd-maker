@@ -42,7 +42,11 @@ sys.path.insert(0, str(APP.parent))
 from project_io import GLOBAL_KEYS, PATTERN_KEY, encode_project, decode_project, ProjectError
 from xrd_io import read_patterns, XRDParseError
 from figure_style import (STYLE_DEFAULTS, STYLE_KEYS, FIGURE_PRESETS_MM, mm_to_inches,
-    inches_to_mm, font_rcparams, apply_mpl_style, export_figure, resolve_font, validate_style_settings)
+    inches_to_mm, font_rcparams, apply_mpl_style, export_figure, resolve_font, validate_style_settings,
+    css_font_stack, FONT_FAMILIES, METRIC_COMPATIBLE)
+from palettes import (PALETTES, PALETTE_NAMES, DEFAULT_PALETTE, REFERENCE_COLORS, MAX_SHADE_STEPS,
+    palette_sequence, swatch_colors, load_colors, color_emoji)
+from rich_text import rich, to_html
 from style_templates import encode_style_template, decode_style_template
 from project_io import clean_settings
 from plot_annotations import (PreparedCurve, ReferencePeaks, match_reference_peaks,
@@ -87,13 +91,18 @@ def renderer_namespace(normalize=False):
         add_mpl_reference_hkl_labels=add_mpl_reference_hkl_labels, add_plotly_reference_hkl_labels=add_plotly_reference_hkl_labels,
         add_mpl_zoom_inset=add_mpl_zoom_inset, add_plotly_zoom_inset=add_plotly_zoom_inset,
         format_hkl_groups=format_hkl_groups,
+        css_font_stack=css_font_stack, FONT_FAMILIES=FONT_FAMILIES, METRIC_COMPATIBLE=METRIC_COMPATIBLE,
+        PALETTES=PALETTES, PALETTE_NAMES=PALETTE_NAMES, DEFAULT_PALETTE=DEFAULT_PALETTE,
+        REFERENCE_COLORS=REFERENCE_COLORS, MAX_SHADE_STEPS=MAX_SHADE_STEPS, palette_sequence=palette_sequence,
+        swatch_colors=swatch_colors, load_colors=load_colors, color_emoji=color_emoji, rich=rich, to_html=to_html,
         plot_style=dict(STYLE_DEFAULTS), _lang_code="ja", show_hkl=False, show_phase_markers=False,
         show_zoom=False, zoom_range=(15.,25.), zoom_location="upper left", phase_tolerance=.1, annotation_font_size=8,
         st=SimpleNamespace(session_state={
             "extra_offset_0": 0.35, "extra_offset_1": -0.2, "extra_offset_2": 1.1,
         }, cache_data=lambda **kwargs: lambda fn: fn),
         show_legend=True, show_cif_legend=True, normalize=normalize,
-        fig_width=6.0, fig_height=4.0, font_size=10,
+        fig_width=6.0, fig_height=4.0, font_size=10, tick_font_size=10, legend_font_size=10,
+        x_title="Diffraction angle, 2<i>θ</i> (deg.)", y_title="Intensity (a.u.)",
         major_tick=10.0, show_minor=True, minor_tick=2.0,
         x_min=10.0, x_max=40.0, show_side_labels=True,
         label_side="右", label_fontsize=10, label_offset_x=0.5, label_offset_y=0.05,

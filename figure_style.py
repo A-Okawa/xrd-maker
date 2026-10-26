@@ -17,12 +17,38 @@ from matplotlib.text import Text
 
 
 MM_PER_INCH = 25.4
-FONT_FAMILIES = ("Arial", "DejaVu Sans", "Times New Roman")
+# The same choices as the graph app (figapp), plus Times New Roman kept for earlier projects.
+FONT_FAMILIES = ("Arial", "Helvetica", "Liberation Sans", "DejaVu Sans", "Times New Roman")
+# Installed fonts tried in order, as in the graph app: Arial-compatible fonts first, DejaVu last.
+FONT_CANDIDATES = {
+    "Arial": ("Arial", "Helvetica", "Liberation Sans", "Arimo", "DejaVu Sans"),
+    "Helvetica": ("Helvetica", "Arial", "Liberation Sans", "Arimo", "DejaVu Sans"),
+    "Liberation Sans": ("Liberation Sans", "Arimo", "Arial", "Helvetica", "DejaVu Sans"),
+    "DejaVu Sans": ("DejaVu Sans",),
+    "Times New Roman": ("Times New Roman", "Liberation Serif", "Times", "DejaVu Serif"),
+}
+# Fonts with the same character widths: text laid out with one fits the other exactly,
+# so an editable SVG can name the requested font (Illustrator then opens it in Arial).
+METRIC_COMPATIBLE = {
+    "Arial": {"Liberation Sans", "Arimo", "Helvetica"},
+    "Helvetica": {"Arial", "Liberation Sans", "Arimo"},
+    "Times New Roman": {"Liberation Serif", "Times"},
+}
+# Glyphs missing from the chosen font (Liberation Sans has no △ or ◇) come from DejaVu Sans.
+GLYPH_FALLBACK = "DejaVu Sans"
+CSS_FONT_STACKS = {
+    "Arial": 'Arial, "Liberation Sans", Arimo, Helvetica, sans-serif',
+    "Helvetica": 'Helvetica, Arial, "Liberation Sans", Arimo, sans-serif',
+    "Liberation Sans": '"Liberation Sans", Arimo, Arial, Helvetica, sans-serif',
+    "DejaVu Sans": '"DejaVu Sans", Verdana, sans-serif',
+    "Times New Roman": '"Times New Roman", "Liberation Serif", Times, serif',
+}
 # These are convenient starting sizes, not journal-specific specifications.
 FIGURE_PRESETS_MM = {
     "custom": None,
     "single": (85.0, 70.0),
     "double": (180.0, 120.0),
+    "figapp": (88.0, 70.0),
 }
 STYLE_DEFAULTS = {
     "size_unit": "mm",
@@ -31,6 +57,9 @@ STYLE_DEFAULTS = {
     "line_width": 1.2,
     "reference_line_width": 1.0,
     "axes_line_width": 0.8,
+    "tick_length": 5.0,
+    "tick_direction": "auto",
+    "axes_box": True,
     "margin_left": 0.14,
     "margin_right": 0.97,
     "margin_bottom": 0.14,
@@ -39,6 +68,7 @@ STYLE_DEFAULTS = {
     "svg_text_editable": True,
 }
 STYLE_KEYS = frozenset(STYLE_DEFAULTS)
+_NUMBER_BOUNDS = {"tick_length": (0.5, 10.0)}
 EXPORT_MIME_TYPES = {
     "png": "image/png",
     "tiff": "image/tiff",
@@ -130,12 +160,16 @@ def validate_style_settings(settings: Mapping | None, *, fill_defaults: bool = F
                 raise ValueError("Unknown figure size preset.")
         elif key == "font_family":
             value = _font_name(value)
-        elif key in ("transparent_background", "svg_text_editable"):
+        elif key == "tick_direction":
+            # auto: inward without references, outward on the reference axis (the earlier fixed behaviour).
+            if value not in ("auto", "in", "out"):
+                raise ValueError("Tick direction must be auto, in or out.")
+        elif key in ("transparent_background", "svg_text_editable", "axes_box"):
             if not isinstance(value, bool):
                 raise ValueError(f"{key} must be true or false.")
         else:
             value = _finite_number(value, key)
-            lower, upper = (0.0, 1.0) if key.startswith("margin_") else (0.1, 5.0)
+            lower, upper = (0.0, 1.0) if key.startswith("margin_") else _NUMBER_BOUNDS.get(key, (0.1, 5.0))
             if not lower <= value <= upper:
                 raise ValueError(f"{key} must be between {lower:g} and {upper:g}.")
         cleaned[key] = value
@@ -148,13 +182,13 @@ def validate_style_settings(settings: Mapping | None, *, fill_defaults: bool = F
 
 
 def resolve_font_family(requested: str = "Arial") -> str:
-    """Resolve an installed font, keeping serif/sans-serif character on fallback."""
+    """Resolve an installed font, keeping serif/sans-serif character on fallback.
+
+    Arial falls back to Helvetica, then Liberation Sans or Arimo (same character
+    widths as Arial), as in the graph app; DejaVu Sans is the last resort.
+    """
     requested = _font_name(requested)
-    candidates = {
-        "Arial": ("Arial", "Liberation Sans", "DejaVu Sans"),
-        "Times New Roman": ("Times New Roman", "Liberation Serif", "Times", "DejaVu Serif"),
-        "DejaVu Sans": ("DejaVu Sans",),
-    }[requested]
+    candidates = FONT_CANDIDATES[requested]
     for family in candidates:
         try:
             path = font_manager.findfont(
@@ -173,15 +207,31 @@ def resolve_font(family: str = "Arial") -> str:
     return resolve_font_family(family)
 
 
+def font_family_list(family: str) -> list[str]:
+    """The family for Text objects, with the glyph fallback for characters it lacks (△, ◇)."""
+    return [family] if family == GLYPH_FALLBACK else [family, GLYPH_FALLBACK]
+
+
+def css_font_stack(requested: str = "Arial") -> str:
+    """CSS font-family for the browser preview: the viewer's own Arial, else a same-width substitute."""
+    return CSS_FONT_STACKS[_font_name(requested)]
+
+
 def font_rcparams(settings: Mapping | None = None) -> dict:
+    """Fonts for text and mathtext alike, as in the graph app: italics, subscripts and
+    superscripts are drawn in the same font as the rest of the label."""
     style = validate_style_settings(settings, fill_defaults=True)
     family = resolve_font_family(style["font_family"])
     return {
-        "font.family": [family],
+        "font.family": font_family_list(family),
         "mathtext.fontset": "custom",
+        "mathtext.default": "it",
         "mathtext.rm": family,
         "mathtext.it": f"{family}:italic",
         "mathtext.bf": f"{family}:bold",
+        "mathtext.sf": family,
+        "mathtext.cal": family,
+        "axes.unicode_minus": True,
         "pdf.fonttype": 42,
         "ps.fonttype": 42,
         "svg.fonttype": "none" if style["svg_text_editable"] else "path",
@@ -190,7 +240,29 @@ def font_rcparams(settings: Mapping | None = None) -> dict:
         "xtick.minor.width": style["axes_line_width"],
         "ytick.major.width": style["axes_line_width"],
         "ytick.minor.width": style["axes_line_width"],
+        "xtick.major.size": style["tick_length"],
+        "xtick.minor.size": style["tick_length"] / 2,
+        "ytick.major.size": style["tick_length"],
+        "ytick.minor.size": style["tick_length"] / 2,
     }
+
+
+def svg_font_names(svg: bytes, requested: str) -> bytes:
+    """Name the requested font in an editable SVG drawn with a same-width substitute.
+
+    Liberation Sans / Arimo stand in for Arial where Arial is not installed (Streamlit
+    Cloud); their character widths are identical, so the SVG says Arial and opens in
+    Arial on the user's computer. A substitute with other widths (DejaVu) is left as is.
+    """
+    requested = _font_name(requested)
+    resolved = resolve_font_family(requested)
+    if resolved == requested or resolved not in METRIC_COMPATIBLE.get(requested, ()):
+        return svg
+    text = svg.decode("utf-8")
+    text = text.replace(f"font-family: '{resolved}'", f"font-family: '{requested}'")
+    text = text.replace(f"font-family:'{resolved}'", f"font-family:'{requested}'")
+    text = text.replace(f"font-family: {resolved};", f"font-family: {requested};")
+    return text.encode("utf-8")
 
 
 def apply_mpl_style(fig, settings: Mapping | None = None):
@@ -218,8 +290,12 @@ def apply_mpl_style(fig, settings: Mapping | None = None):
         for spine in ax.spines.values():
             spine.set_linewidth(style["axes_line_width"])
         ax.tick_params(which="both", width=style["axes_line_width"])
+    families = font_family_list(family)
     for text in fig.findobj(match=Text):
-        text.set_fontfamily(family)
+        text.set_fontfamily(families)
+        # Mathtext (italics, sub/superscripts) in the chosen font even for text made before the
+        # font settings: each Text keeps the math font set that was current when it was created.
+        text.set_math_fontfamily("custom")
     return fig
 
 
@@ -263,4 +339,6 @@ def export_figure(fig, format: str, dpi: float = 300, settings: Mapping | None =
             transparent=style_values["transparent_background"],
             **save_options,
         )
+    if format == "svg" and style_values["svg_text_editable"]:
+        return svg_font_names(result.getvalue(), style_values["font_family"])
     return result.getvalue()

@@ -20,6 +20,7 @@ import numpy as np
 
 MARKER_SHAPES = ("circle", "triangle", "square", "diamond")
 _MPL_MARKERS = {"circle": "o", "triangle": "^", "square": "s", "diamond": "D"}
+_TAG = re.compile(r"</?(?:i|b|sub|sup|br)\s*/?>", re.I)
 _PLOTLY_MARKERS = {"circle": "circle", "triangle": "triangle-up", "square": "square", "diamond": "diamond"}
 
 
@@ -58,6 +59,11 @@ class PeakMatch:
     color: str
     marker: str
     source: str = "detected"
+
+
+def _hover_text(name) -> str:
+    """Names may carry Plotly's <i>/<sub> markup for the legend; hover text shows them plainly."""
+    return html.escape(html.unescape(_TAG.sub("", str(name))))
 
 
 def _curve_arrays(curve: PreparedCurve):
@@ -266,7 +272,7 @@ def add_plotly_phase_annotations(fig, matches: Sequence[PeakMatch], *, show_hkl:
             marker=dict(symbol=_PLOTLY_MARKERS[first.marker] + "-open", size=marker_size * 1.4,
                         color=first.color, line=dict(color=first.color, width=1.0)),
             customdata=[[m.reference_x, m.delta_deg] for m in group],
-            hovertemplate=html.escape(first.phase_name) + "<br>2θ=%{x:.4f}°<br>Reference=%{customdata[0]:.4f}°<br>Δ=%{customdata[1]:.4f}°<extra></extra>"))
+            hovertemplate=_hover_text(first.phase_name) + "<br>2θ=%{x:.4f}°<br>Reference=%{customdata[0]:.4f}°<br>Δ=%{customdata[1]:.4f}°<extra></extra>"))
         seen.add(first.phase_index)
         if show_hkl:
             for match in group:
@@ -463,7 +469,7 @@ def add_plotly_zoom_inset(fig, curves: Sequence[PreparedCurve], x_range, *, loca
     for curve, x, y in clipped:
         fig.add_trace(go.Scatter(x=x, y=y, xaxis=xref, yaxis=yref, mode="lines", name=curve.name,
             line=dict(color=curve.color, width=curve.linewidth * 4 / 3), showlegend=False, cliponaxis=True,
-            hovertemplate=html.escape(curve.name) + "<br>2θ=%{x:.4f}°<br>I=%{y:.4g}<extra></extra>"))
+            hovertemplate=_hover_text(curve.name) + "<br>2θ=%{x:.4f}°<br>I=%{y:.4g}<extra></extra>"))
     fig.add_annotation(x=domain_x[1] - .03 * (domain_x[1] - domain_x[0]),
         y=domain_y[1] - .04 * (domain_y[1] - domain_y[0]), xref="paper", yref="paper",
         text=f"{interval[0]:g}–{interval[1]:g}°", showarrow=False, xanchor="right", yanchor="top",

@@ -27,6 +27,7 @@ GLOBAL_KEYS = (
     "phase_tolerance", "annotation_font_size", "show_zoom", "zoom_range", "zoom_location",
     "tick_font_size", "legend_font_size", "x_label", "y_label",
     "palette", "palette_reverse", "palette_refs", "palette_steps",
+    "palette_from", "palette_to", "palette_base_color",
 ) + tuple(STYLE_KEYS)
 PATTERN_KEY = re.compile(
     r"(?:vis|ord|_val_lbl|xrd_color|extra_offset|yoff|cvis|cord|_val_clbl|"
@@ -43,9 +44,11 @@ BOUNDS = {
     "label_offset_y": (-.3, 1.), "fig_width": (25 / 25.4, 20.), "fig_height": (25 / 25.4, 20.),
     "font_size": (4, 28), "tick_font_size": (4, 28), "legend_font_size": (4, 28),
     "phase_tolerance": (.01, 1.), "annotation_font_size": (5, 16), "palette_steps": (0, 12),
+    "palette_from": (1, 10000), "palette_to": (0, 10000),
 }
 # Axis-label, tick and legend sizes take half points (7, 6.5 pt) as in the graph app.
-INT_KEYS = {"cif_label_fontsize", "label_fontsize", "annotation_font_size", "palette_steps"}
+INT_KEYS = {"cif_label_fontsize", "label_fontsize", "annotation_font_size", "palette_steps",
+            "palette_from", "palette_to"}
 MAX_AXIS_LABEL = 500
 
 
@@ -93,6 +96,8 @@ def clean_settings(settings: dict) -> dict:
             valid = isinstance(value, str) and len(value) <= MAX_AXIS_LABEL
         elif key == "palette":
             valid = value in PALETTES
+        elif key == "palette_base_color":
+            valid = isinstance(value, str) and re.fullmatch(r"#[0-9a-fA-F]{6}", value) is not None
         elif key == "dpi_export":
             valid = type(value) is int and value in (300, 600)
         elif re.fullmatch(r"(?:ord|cord|pord)_\d+", key):

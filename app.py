@@ -33,7 +33,7 @@ from palettes import (
     PALETTES, PALETTE_NAMES, DEFAULT_PALETTE, REFERENCE_COLORS, MAX_SHADE_STEPS,
     palette_sequence, swatch_colors, load_colors, color_emoji,
 )
-from rich_text import rich, to_html
+from rich_text import rich, to_html, plain
 from style_templates import encode_style_template, decode_style_template
 from plot_annotations import (
     PreparedCurve, ReferencePeaks, match_reference_peaks,
@@ -616,14 +616,37 @@ def _int_or(value, default):
     return value if type(value) is int else default
 
 
+def pattern_display_order():
+    """Pattern indices in display order (the 表示順 numbers; equal numbers keep the file order)."""
+    state = st.session_state
+    n_xrd = len(state.get("_xrd_pattern_names") or [])
+    return sorted(range(n_xrd), key=lambda i: (_int_or(state.get(f"ord_{i}"), i + 1), i))
+
+
+def palette_range(n):
+    """First and last display positions (1-based, inclusive) that take the palette; the rest are the base colour.
+
+    palette_to = 0 means "to the last pattern", so patterns added later are included.
+    """
+    state = st.session_state
+    lo = min(max(_int_or(state.get("palette_from"), 1), 1), max(n, 1))
+    to = _int_or(state.get("palette_to"), 0)
+    hi = n if to <= 0 else min(max(to, lo), n)
+    return lo, hi
+
+
+def palette_base_color():
+    value = st.session_state.get("palette_base_color")
+    return value if isinstance(value, str) and re.fullmatch(r"#[0-9a-fA-F]{6}", value) else "#000000"
+
+
 def palette_items():
     """Colour keys in display order: [(key, visible)] for measured patterns and for references.
 
     Uses only session state, so the palette callbacks see the same order as the panel.
     """
     state = st.session_state
-    n_xrd = len(state.get("_xrd_pattern_names") or [])
-    patterns = sorted(range(n_xrd), key=lambda i: (_int_or(state.get(f"ord_{i}"), i + 1), i))
+    patterns = pattern_display_order()
     n_cif = len(state.get("_cif_bytes") or {})
     refs = ([(_int_or(state.get(f"cord_{i}"), i + 1), f"cif_color_{i}", state.get(f"cvis_{i}", True)) for i in range(n_cif)]
             + [(_int_or(state.get(f"pord_{i}"), n_cif + i + 1), f"pdf_color_{i}", state.get(f"pvis_{i}", True))
@@ -636,27 +659,31 @@ def palette_items():
 def palette_plan():
     """The palette colour for every pattern and reference key, and the number of items it colours.
 
-    Visible items take the palette in display order (shades spread over them, as the graph
-    app spreads them over its series); hidden ones continue after them. References keep
-    black-then-Okabe–Ito colours unless the palette is applied to them too.
+    Visible patterns within the chosen range take the palette in display order (shades spread
+    over them, as the graph app spreads them over its series); hidden ones continue after them.
+    Patterns outside the range (a base measurement, for example) take the base colour, black by
+    default. References keep black-then-Okabe–Ito colours unless the palette is applied to them too.
     """
     state = st.session_state
     name = state.get("palette", DEFAULT_PALETTE)
     name = name if name in PALETTES else DEFAULT_PALETTE
     reverse, steps = bool(state.get("palette_reverse", False)), _int_or(state.get("palette_steps"), 0)
     patterns, refs = palette_items()
-    targets = patterns + refs if state.get("palette_refs", False) else patterns
+    lo, hi = palette_range(len(patterns))
+    shaded = patterns[lo - 1:hi]
+    targets = shaded + refs if state.get("palette_refs", False) else shaded
     visible = [key for key, shown in targets if shown]
     hidden = [key for key, shown in targets if not shown]
-    plan = {} if state.get("palette_refs", False) else {
-        key: REFERENCE_COLORS[rank % len(REFERENCE_COLORS)] for rank, (key, _) in enumerate(refs)}
+    plan = {key: palette_base_color() for key, _ in patterns[:lo - 1] + patterns[hi:]}
+    if not state.get("palette_refs", False):
+        plan.update({key: REFERENCE_COLORS[rank % len(REFERENCE_COLORS)] for rank, (key, _) in enumerate(refs)})
     plan.update(zip(visible, palette_sequence(name, len(visible), reverse, steps)))
     plan.update(zip(hidden, palette_sequence(name, len(targets), reverse, steps)[len(visible):]))
     return plan, len(visible)
 
 
 def _apply_palette():
-    """Colour the visible patterns (and references, if chosen) with the chosen palette."""
+    """Colour the visible patterns (and references, if chosen): the palette within the range, the base colour outside."""
     plan, _ = palette_plan()
     patterns, refs = palette_items()
     targets = patterns + refs if st.session_state.get("palette_refs", False) else patterns
@@ -666,6 +693,22 @@ def _apply_palette():
     for key in list(st.session_state):
         if str(key).startswith(("_palview_", "_cname_")):
             del st.session_state[key]
+
+
+def _set_palette_range(n):
+    lo, hi = st.session_state.get("_palette_range", (1, n))
+    st.session_state["palette_from"] = int(lo)
+    st.session_state["palette_to"] = 0 if int(hi) >= n else int(hi)
+    _apply_palette()
+
+
+def top_to_bottom(levels):
+    """Positions ordered as the curves appear from top to bottom, for the legend.
+
+    ``levels`` are the curves' vertical positions (stacking offsets) in display order;
+    equal levels (overlapping curves) keep the display order.
+    """
+    return sorted(range(len(levels)), key=lambda k: -levels[k])
 
 
 def _set_color(key, value):
@@ -1171,7 +1214,8 @@ if active_xrd:
     pdf_sort_idx = []
 
     for _key, _value in (("palette", DEFAULT_PALETTE), ("palette_reverse", False),
-                         ("palette_refs", False), ("palette_steps", 0)):
+                         ("palette_refs", False), ("palette_steps", 0),
+                         ("palette_from", 1), ("palette_to", 0), ("palette_base_color", "#000000")):
         st.session_state.setdefault(_key, _value)
     if st.session_state["palette"] not in PALETTES:
         st.session_state["palette"] = DEFAULT_PALETTE
@@ -1186,6 +1230,24 @@ if active_xrd:
                     format_func=lambda key: PALETTE_NAMES[_lang_code][key], on_change=_apply_palette,
                     help=ui("グラフ描画appと同じ色の組み合わせです。選ぶと、表示中のパターンに表示順で色が付きます。",
                             "The graph app's palettes. Choosing one colours the visible patterns in display order."))
+                if len(active_xrd) >= 2:
+                    _n = len(active_xrd)
+                    _lo, _hi = palette_range(_n)
+                    st.session_state["_palette_range"] = (_lo, _hi)
+                    st.slider(ui("色を付ける範囲（表示順）", "Coloured patterns (display order)"), min_value=1, max_value=_n,
+                        step=1, key="_palette_range", on_change=_set_palette_range, args=(_n,),
+                        help=ui("この範囲のパターンだけに色の組み合わせ（濃淡）を付けます。範囲外のパターン（ベースの測定など）は「範囲外の色」（初期値は黒）になります。",
+                                "Only these patterns take the palette (shades). Patterns outside the range, such as a base measurement, take the outside colour (black by default)."))
+                    _names = [plain(st.session_state.get(f"_val_lbl_{i}") or os.path.splitext(active_xrd[i].name)[0])
+                              for i in pattern_display_order()]
+                    _outside = _names[:_lo - 1] + _names[_hi:]
+                    _shaded = _names[_lo - 1:_hi]
+                    st.caption(ui("色の組み合わせ：", "Palette: ") + (f"{_shaded[0]} 〜 {_shaded[-1]}" if len(_shaded) > 1 else _shaded[0])
+                               + (ui("　／　範囲外：", "  /  outside: ") + "、".join(_outside) if _outside else ""))
+                    if _outside:
+                        st.color_picker(ui("範囲外の色", "Colour outside the range"), key="palette_base_color",
+                                        on_change=_apply_palette,
+                                        help=ui("範囲外のパターン（ベースの測定など）の色です。", "Colour of the patterns outside the range."))
                 st.checkbox(ui("濃淡（色の順）を逆に", "Reverse shades"), key="palette_reverse", on_change=_apply_palette,
                     help=ui("「…の濃淡」では 1 つ目のパターンが濃い色になります。ほかの組み合わせでは色の順が逆になります。",
                             "With shades, the first pattern gets the dark one; other palettes reverse the order."))
@@ -1430,6 +1492,7 @@ if active_xrd:
         cumulative_y = 0.0
         side_labels  = []
         prepared_curves, phase_refs = [], []
+        legend_levels, legend_lines = [], []
 
         if has_xrd:
             for i in sort_idx:
@@ -1458,11 +1521,14 @@ if active_xrd:
                     y_plot    = y + baseline
                     side_labels.append((baseline + y_min_n + label_offset_y * (y_max - y_min_n), colors_sel[i], labels[i]))
                     cumulative_y += global_offset * y_max
+                    legend_levels.append(baseline)
                 else:
                     y_plot = y + abs_offsets[i]
                     side_labels.append((abs_offsets[i] + y_min + label_offset_y * (y_max - y_min), colors_sel[i], labels[i]))
+                    legend_levels.append(abs_offsets[i])
 
-                ax_main.plot(x, y_plot, color=colors_sel[i], linewidth=plot_style["line_width"], label=rich(labels[i]))
+                curve, = ax_main.plot(x, y_plot, color=colors_sel[i], linewidth=plot_style["line_width"], label=rich(labels[i]))
+                legend_lines.append(curve)
                 prepared_curves.append(PreparedCurve(rich(labels[i]), x, y_plot, colors_sel[i], plot_style["line_width"]))
 
                 if show_peaks:
@@ -1492,10 +1558,18 @@ if active_xrd:
                     bbox=dict(fc="white", ec="none", alpha=0.6, pad=1),
                 )
 
+        def stacked_legend():
+            # The patterns from top to bottom as they are stacked, then any other entries (phase markers).
+            ordered = [legend_lines[k] for k in top_to_bottom(legend_levels)]
+            ordered = [h for h in ordered if h.get_label() and not h.get_label().startswith("_")]
+            handles, _ = ax_main.get_legend_handles_labels()
+            extras = [h for h in handles if all(h is not o for o in ordered)]
+            ax_main.legend(handles=ordered + extras, loc="upper right", frameon=False)
+
         ax_main.set_ylabel(rich(y_title))
         ax_main.set_yticks([])
         if show_legend:
-            ax_main.legend(loc="upper right", frameon=False)
+            stacked_legend()
 
         xlabel = rich(x_title)
         if ax_ref is None:
@@ -1557,7 +1631,7 @@ if active_xrd:
             matches = match_reference_peaks(prepared_curves, phase_refs, phase_tolerance)
             add_mpl_phase_annotations(ax_main, matches, show_hkl=False, font_size=annotation_font_size, show_legend=show_legend)
             if show_legend:
-                ax_main.legend(loc="upper right", frameon=False)
+                stacked_legend()
         if show_zoom and x_min <= zoom_range[0] < zoom_range[1] <= x_max:
             add_mpl_zoom_inset(ax_main, prepared_curves, zoom_range, location=zoom_location, font_size=annotation_font_size)
         return fig
@@ -1578,6 +1652,7 @@ if active_xrd:
 
         cumulative_y = 0.0
         prepared_curves, phase_refs = [], []
+        legend_levels, legend_traces = [], []
 
         for i in sort_idx:
             if not visibles[i]:
@@ -1602,16 +1677,19 @@ if active_xrd:
                 extra_off = float(st.session_state.get(f"extra_offset_{i}", 0.0))
                 y_plot  = y + cumulative_y + extra_off
                 y_label = cumulative_y + extra_off + y_min_n + label_offset_y * (y_max - y_min_n)
+                legend_levels.append(cumulative_y + extra_off)
                 cumulative_y += global_offset * y_max
             else:
                 y_plot  = y + abs_offsets[i]
                 y_label = abs_offsets[i] + y_min + label_offset_y * (y_max - y_min)
+                legend_levels.append(abs_offsets[i])
 
             pfig.add_trace(go.Scatter(
                 x=x, y=y_plot, name=mpl_to_plotly(labels[i]),
                 line=dict(color=colors_sel[i], width=plot_style["line_width"] * 4 / 3),
                 mode="lines", showlegend=show_legend,
             ), row=1, col=1)
+            legend_traces.append(len(pfig.data) - 1)
             prepared_curves.append(PreparedCurve(mpl_to_plotly(labels[i]), x, y_plot, colors_sel[i], plot_style["line_width"]))
 
             if show_peaks:
@@ -1639,6 +1717,10 @@ if active_xrd:
                     showlegend=False,
                     hoverinfo="skip",
                 ), row=1, col=1)
+
+        # Legend from top to bottom as the patterns are stacked (phase markers keep the default rank, after them).
+        for rank, k in enumerate(top_to_bottom(legend_levels), start=1):
+            pfig.data[legend_traces[k]].legendrank = rank
 
         if has_ref and refs:
             bar_height = 70.0 if show_hkl else 80.0

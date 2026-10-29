@@ -89,7 +89,7 @@ def clean_settings(settings: dict) -> dict:
         elif key in ("cif_label_side", "label_side"):
             valid = value in ("左", "右")
         elif key == "lang_radio":
-            valid = value in ("日本語", "English")
+            valid = value in ("日本語", "English", "Tiếng Việt", "ไทย")
         elif key == "zoom_location":
             valid = value in ("upper left", "upper right", "lower left", "lower right")
         elif key in ("x_label", "y_label"):

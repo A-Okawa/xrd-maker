@@ -31,6 +31,12 @@ PALETTE_NAMES = {
     "en": {"paper": "Publication (blue, vermilion, green…)", "okabe_ito": "Okabe–Ito", "blues": "Blue shades",
            "oranges": "Orange shades", "greens": "Green shades", "greys": "Grey shades", "viridis": "viridis",
            "tab10": "Matplotlib default"},
+    "vi": {"paper": "Cho bài báo (xanh dương, đỏ son, xanh lá…)", "okabe_ito": "Okabe–Ito", "blues": "Xanh dương đậm nhạt",
+           "oranges": "Cam đậm nhạt", "greens": "Xanh lá đậm nhạt", "greys": "Xám đậm nhạt", "viridis": "viridis",
+           "tab10": "Mặc định của matplotlib"},
+    "th": {"paper": "สำหรับบทความ (น้ำเงิน แสด เขียว…)", "okabe_ito": "Okabe–Ito", "blues": "เฉดน้ำเงิน",
+           "oranges": "เฉดส้ม", "greens": "เฉดเขียว", "greys": "เฉดเทา", "viridis": "viridis",
+           "tab10": "ค่าเริ่มต้นของ matplotlib"},
 }
 DEFAULT_PALETTE = "paper"
 MAX_SHADE_STEPS = 12

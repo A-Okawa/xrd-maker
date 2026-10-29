@@ -34,6 +34,7 @@ from palettes import (
     palette_sequence, swatch_colors, load_colors, color_emoji,
 )
 from rich_text import rich, to_html, plain
+from i18n import LANGUAGES, KEYED_TEXT, INLINE_TEXT, color_name
 from style_templates import encode_style_template, decode_style_template
 from plot_annotations import (
     PreparedCurve, ReferencePeaks, match_reference_peaks,
@@ -272,6 +273,8 @@ TRANSLATIONS = {
         "pdf_error": "PDF card parse error: ",
     },
 }
+# Vietnamese and Thai screen text (i18n.py); a text missing there is shown in English.
+TRANSLATIONS.update(KEYED_TEXT)
 
 # ===== 色データ（言語非依存） =====
 _COLOR_FAMILIES_DATA = OrderedDict([
@@ -334,17 +337,32 @@ FULL_WIDTH_IMAGE = ({"width": "stretch"} if "int" not in str(_IMAGE_PARAMETERS["
                     else {"use_container_width": True} if "use_container_width" in _IMAGE_PARAMETERS
                     else {"use_column_width": True})
 
+
+def _full_width(widget):
+    """Stretch a widget to its column: width="stretch" where Streamlit has the new width argument
+    (use_container_width is deprecated there and is to be removed), use_container_width on 1.32."""
+    width = inspect.signature(widget).parameters.get("width")
+    return {"width": "stretch"} if width is not None and isinstance(width.default, str) else {"use_container_width": True}
+
+
+FULL_WIDTH = {name: _full_width(getattr(st, name)) for name in ("button", "download_button", "popover", "plotly_chart")}
+
 # ===== 言語選択 / Language selection =====
 _lang_option = st.sidebar.radio(
-    "🌐 Language / 言語", ["日本語", "English"],
+    "🌐 Language / 言語", list(LANGUAGES),
     horizontal=True, key="lang_radio",
 )
-_lang_code = "en" if _lang_option == "English" else "ja"
-T = TRANSLATIONS[_lang_code]
+_lang_code = LANGUAGES.get(_lang_option, "ja")
+T = {**TRANSLATIONS["en"], **TRANSLATIONS[_lang_code]}
 
 
 def ui(ja, en):
-    return en if _lang_code == "en" else ja
+    """Inline screen text. Vietnamese and Thai come from i18n.INLINE_TEXT, looked up by the English text."""
+    if _lang_code == "ja":
+        return ja
+    if _lang_code == "en":
+        return en
+    return INLINE_TEXT.get(_lang_code, {}).get(en, en)
 
 
 def _widget_default(key, default, checkbox=False, number=False):
@@ -423,17 +441,17 @@ def label_input(key: str, default: str = "") -> str:
     st.session_state[val_key] = inp
 
     c1, c2, c3 = st.columns(3)
-    if c1.button(T["add_italic"], key=f"_bi_{key}", use_container_width=True,
+    if c1.button(T["add_italic"], key=f"_bi_{key}", **FULL_WIDTH["button"],
                  help=T["italic_help"]):
         st.session_state[val_key] = inp + "<i>TEXT</i>"
         st.session_state[ver_key] += 1
         st.rerun()
-    if c2.button(T["add_subscript"], key=f"_bs_{key}", use_container_width=True,
+    if c2.button(T["add_subscript"], key=f"_bs_{key}", **FULL_WIDTH["button"],
                  help=T["subscript_help"]):
         st.session_state[val_key] = inp + "_{N}"
         st.session_state[ver_key] += 1
         st.rerun()
-    if c3.button(T["add_superscript"], key=f"_bp_{key}", use_container_width=True,
+    if c3.button(T["add_superscript"], key=f"_bp_{key}", **FULL_WIDTH["button"],
                  help=T["superscript_help"]):
         st.session_state[val_key] = inp + "^{N}"
         st.session_state[ver_key] += 1
@@ -739,7 +757,7 @@ def color_picker_popover(key: str, default_hex: str, n_items: int = 1):
         f'border:1px solid #ccc;margin-bottom:4px"></div>',
         unsafe_allow_html=True,
     )
-    with st.popover(T["change_color"], use_container_width=True):
+    with st.popover(T["change_color"], **FULL_WIDTH["popover"]):
         view_key = f"_palview_{key}"
         if st.session_state.get(view_key) not in SWATCH_SETS:
             st.session_state[view_key] = st.session_state.get("palette", DEFAULT_PALETTE)
@@ -761,13 +779,13 @@ def color_picker_popover(key: str, default_hex: str, n_items: int = 1):
                     unsafe_allow_html=True,
                 )
                 st.button("✓" if selected else " ", key=f"{key}_sw_{j}", help=hex_c.upper(),
-                          use_container_width=True, on_click=_set_color, args=(key, hex_c))
+                          **FULL_WIDTH["button"], on_click=_set_color, args=(key, hex_c))
         names = named_colors()
         name_key = f"_cname_{key}"
         st.session_state[name_key] = next((n for n, h in names.items() if h.lower() == current.lower()), OTHER_COLOR)
         st.selectbox(ui("名前で選ぶ", "By name"), [OTHER_COLOR] + list(names), key=name_key,
                      on_change=_named_color_chosen, args=(key, name_key),
-                     format_func=lambda n: n if n == OTHER_COLOR else f"{color_emoji(names[n])} {n}  {names[n]}",
+                     format_func=lambda n: n if n == OTHER_COLOR else f"{color_emoji(names[n])} {color_name(n, _lang_code)}  {names[n]}",
                      help=ui("colors.csv の色（グラフ描画appと同じ書式「名前,#RRGGBB」）。グラフ描画appの colors.csv をこのアプリのフォルダに置くと、同じ名前の色を選べます。",
                              "Colours from colors.csv (the graph app's format, name,#RRGGBB). Put the graph app's colors.csv in this app's folder to share its names."))
         st.color_picker(ui("自由に選ぶ", "Any colour"), key=key)
@@ -783,8 +801,11 @@ for _key in list(st.session_state):
 
 
 def build_session_json(n_xrd: int, n_cif: int, n_pdf: int) -> bytes:
+    # The screen language is recorded only as Japanese or English: earlier versions of the app accept
+    # only these, so a project saved on a Vietnamese or Thai screen still opens there.
     settings = {key: value for key, value in st.session_state.items()
-                if key in GLOBAL_KEYS or PATTERN_KEY.fullmatch(key)}
+                if (key in GLOBAL_KEYS or PATTERN_KEY.fullmatch(key))
+                and (key != "lang_radio" or value in ("日本語", "English"))}
     return encode_project(
         st.session_state.get("_xrd_bytes", {}),
         st.session_state.get("_cif_bytes", {}),
@@ -796,13 +817,14 @@ def restore_session(json_bytes: bytes):
     # This function is called only from callbacks, before widgets are created.
     project = decode_project(json_bytes)
     for key in list(st.session_state):
-        if (key in GLOBAL_KEYS or PATTERN_KEY.fullmatch(key)
-                or re.fullmatch(r"_(?:inp|ver)_(?:lbl|clbl|plbl)_.*|_(?:palview|cname)_.*", key)):
+        # The screen language is the person's own choice: opening someone's project keeps it.
+        if key != "lang_radio" and (key in GLOBAL_KEYS or PATTERN_KEY.fullmatch(key)
+                                    or re.fullmatch(r"_(?:inp|ver)_(?:lbl|clbl|plbl)_.*|_(?:palview|cname)_.*", key)):
             del st.session_state[key]
     for kind in ("xrd", "cif", "pdf"):
         st.session_state[f"_{kind}_bytes"] = project[f"{kind}_files"]
         st.session_state.pop(f"_upload_error_{kind}", None)
-    st.session_state.update(project["settings"])
+    st.session_state.update({key: value for key, value in project["settings"].items() if key != "lang_radio"})
     st.session_state["_file_epoch"] = st.session_state.get("_file_epoch", 0) + 1
     st.session_state["_xrd_pattern_names"] = None
     st.session_state["_project_loaded"] = True
@@ -933,7 +955,7 @@ def _remap_file_session_state(old_names: list, new_names: list, key_tmpls: list)
 
 # ===== サイドバー =====
 
-st.sidebar.caption("Last updated: 2026-10-26")
+st.sidebar.caption("Last updated: 2026-10-29")
 st.sidebar.header(T["session_header"])
 st.sidebar.caption(T["project_help"])
 session_upload = st.sidebar.file_uploader(
@@ -948,8 +970,8 @@ if LOCAL_DATA_DIR and (LOCAL_DATA_DIR / "autosave.json").is_file() and not any(
     st.session_state.get(f"_{kind}_bytes") for kind in ("xrd", "cif", "pdf")
 ):
     st.sidebar.button(T["resume_local"], on_click=_open_local_autosave,
-                      use_container_width=True)
-st.sidebar.button(T["new_project"], on_click=_new_project, use_container_width=True)
+                      **FULL_WIDTH["button"])
+st.sidebar.button(T["new_project"], on_click=_new_project, **FULL_WIDTH["button"])
 autosave_status = st.sidebar.empty()
 
 _file_epoch = st.session_state.get("_file_epoch", 0)
@@ -1014,7 +1036,7 @@ if active_pdf and not pdf_ref_files:
     st.sidebar.caption(T["restored_pdf"] + ", ".join(f.name for f in active_pdf))
 
 st.sidebar.header(T["graph_settings"])
-if active_xrd and st.sidebar.button(T["data_range"], use_container_width=True):
+if active_xrd and st.sidebar.button(T["data_range"], **FULL_WIDTH["button"]):
     _xmin = min(float(file.pattern[:, 0].min()) for file in active_xrd)
     _xmax = max(float(file.pattern[:, 0].max()) for file in active_xrd)
     _xmin = max(0., np.floor(_xmin * 2) / 2)
@@ -1114,7 +1136,7 @@ for _axis, _label in (("width", ui("図の幅", "Figure width")), ("height", ui(
         max_value=508.0 if size_unit == "mm" else 20.0, step=1.0 if size_unit == "mm" else 0.1,
         format="%.2f", key=f"_figure_{_axis}", on_change=_update_figure_dimension, args=(_axis,))
 fig_width, fig_height = st.session_state["fig_width"], st.session_state["fig_height"]
-dpi_export = st.sidebar.selectbox("Output DPI", [300, 600], index=0, key="dpi_export")
+dpi_export = st.sidebar.selectbox(ui("出力 DPI", "Output DPI"), [300, 600], index=0, key="dpi_export")
 # Older projects store an integer size for everything; ticks and legend start from it.
 st.session_state["font_size"] = float(st.session_state.get("font_size") or 14.0)
 for _key in ("tick_font_size", "legend_font_size"):
@@ -1135,12 +1157,13 @@ with st.sidebar.expander(ui("線・フォント・余白", "Lines, fonts and mar
     _actual_font = resolve_font(st.session_state["font_family"])
     if _actual_font != st.session_state["font_family"]:
         if _actual_font in METRIC_COMPATIBLE.get(st.session_state["font_family"], ()):
-            st.caption(ui(f"この環境には {st.session_state['font_family']} がないため、字幅が同じ {_actual_font} で描きます。"
-                          f"SVG には {st.session_state['font_family']} と書き込むので、手元で開けば {st.session_state['font_family']} になります。",
-                          f"{st.session_state['font_family']} is not installed here, so {_actual_font} (same character widths) is used. "
-                          f"SVG files name {st.session_state['font_family']}, so they open in it on your computer."))
+            st.caption(ui("この環境には {requested} がないため、字幅が同じ {actual} で描きます。"
+                          "SVG には {requested} と書き込むので、手元で開けば {requested} になります。",
+                          "{requested} is not installed here, so {actual} (same character widths) is used. "
+                          "SVG files name {requested}, so they open in it on your computer.")
+                       .format(requested=st.session_state["font_family"], actual=_actual_font))
         else:
-            st.caption(ui(f"この環境では {_actual_font} を使用します。", f"This environment uses {_actual_font}."))
+            st.caption(ui("この環境では {actual} を使用します。", "This environment uses {actual}.").format(actual=_actual_font))
     for _key, _label in (("line_width", ui("測定曲線の線幅 (pt)", "Pattern line width (pt)")),
                         ("reference_line_width", ui("リファレンスの線幅 (pt)", "Reference line width (pt)")),
                         ("axes_line_width", ui("軸・目盛りの線幅 (pt)", "Axes and tick width (pt)"))):
@@ -1178,7 +1201,7 @@ with st.sidebar.expander(ui("作図スタイルの保存・読み込み", "Save 
     if st.session_state.get("_style_error"):
         st.error(st.session_state["_style_error"])
     st.download_button(ui("スタイルを保存 (.json)", "Save figure style (.json)"),
-        encode_style_template(dict(st.session_state)), file_name="xrd_figure_style.json", mime="application/json", use_container_width=True)
+        encode_style_template(dict(st.session_state)), file_name="xrd_figure_style.json", mime="application/json", **FULL_WIDTH["download_button"])
 
 with st.sidebar.expander(ui("ピーク注記・拡大図", "Peak annotations and zoom inset")):
     show_phase_markers = st.checkbox(ui("リファレンスと近い実測ピークに記号", "Mark measured peaks near references"), key="show_phase_markers")
@@ -1264,7 +1287,7 @@ if active_xrd:
                     help=ui("0 はパターンの数で分けます。ほかの図と系列の数が違うときは、その図の系列の数を入れると同じ濃さになります（濃淡と viridis）。",
                             "0 splits the shades by the number of patterns. Enter the number of series of another figure to get its shades (shades and viridis)."))
                 _pc2.markdown('<div style="height:1.75rem"></div>', unsafe_allow_html=True)
-                _pc2.button(ui("色を当てはめ直す", "Re-apply"), on_click=_apply_palette, use_container_width=True,
+                _pc2.button(ui("色を当てはめ直す", "Re-apply"), on_click=_apply_palette, **FULL_WIDTH["button"],
                     help=ui("パターンごとに変えた色を戻すときや、表示順・表示を変えたあとに押します。",
                             "Restores the palette after changing single colours, the display order or visibility."))
 
@@ -1847,7 +1870,7 @@ if active_xrd:
         pfig = build_plotly_figure()
         with interactive_tab:
             st.caption(T["drag_zoom"])
-            st.plotly_chart(pfig, use_container_width=True, config={
+            st.plotly_chart(pfig, **FULL_WIDTH["plotly_chart"], config={
                 "scrollZoom": True,
                 "modeBarButtonsToAdd": ["drawrect"],
                 "modeBarButtonsToRemove": ["lasso2d", "select2d"],
@@ -1875,11 +1898,11 @@ if active_xrd:
 
         st.sidebar.download_button(
             ui("📥 PDF として保存", "📥 Save as PDF"),
-            data=pdf_bytes, file_name="xrd_result.pdf", mime="application/pdf", use_container_width=True,
+            data=pdf_bytes, file_name="xrd_result.pdf", mime="application/pdf", **FULL_WIDTH["download_button"],
         )
         st.sidebar.download_button(
             ui("📥 SVG として保存", "📥 Save as SVG"),
-            data=svg_bytes, file_name="xrd_result.svg", mime="image/svg+xml", use_container_width=True,
+            data=svg_bytes, file_name="xrd_result.svg", mime="image/svg+xml", **FULL_WIDTH["download_button"],
         )
         if not _raster_ok:
             st.sidebar.warning(ui("PNG / TIFFは3,600万画素までです。図の寸法またはDPIを下げてください。PDF / SVGは保存できます。", "For PNG / TIFF, reduce the dimensions or DPI to stay within 36 megapixels. PDF / SVG are available."))
@@ -1888,13 +1911,13 @@ if active_xrd:
                 T["save_tiff"].format(dpi=dpi_export),
                 data=tiff_bytes, file_name="xrd_result.tiff", mime="image/tiff",
                 key=f"dl_tiff_{_sl}_{_scl}_{dpi_export}",
-                use_container_width=True,
+                **FULL_WIDTH["download_button"],
             )
             st.sidebar.download_button(
                 T["save_png"].format(dpi=dpi_export),
                 data=png_export_bytes, file_name="xrd_result.png", mime="image/png",
                 key=f"dl_png_{_sl}_{_scl}",
-                use_container_width=True,
+                **FULL_WIDTH["download_button"],
             )
         st.sidebar.divider()
 
@@ -1913,7 +1936,7 @@ if any(st.session_state.get(f"_{kind}_bytes") for kind in ("xrd", "cif", "pdf"))
             data=_project_bytes,
             file_name="xrd_project.json",
             mime="application/json",
-            use_container_width=True,
+            **FULL_WIDTH["download_button"],
         )
 
         if LOCAL_DATA_DIR:
@@ -1935,7 +1958,7 @@ try:
     st.sidebar.download_button(
         T["download_desktop"], data=create_bundle_bytes(),
         file_name="XRD-Maker-PC.zip", mime="application/zip",
-        use_container_width=True,
+        **FULL_WIDTH["download_button"],
     )
     st.sidebar.caption(T["desktop_help"])
 except (ImportError, FileNotFoundError):

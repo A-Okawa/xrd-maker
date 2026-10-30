@@ -151,6 +151,50 @@ class TextReaderTests(unittest.TestCase):
         p = read_patterns(b"10,3\n11,inf\n12,nan\n13,7\n", "data.csv")[0]
         np.testing.assert_array_equal(p.x, [10, 13])
 
+    def test_rietveld_export_takes_the_observed_column(self):
+        # As written by the refinement export of 20261022_yb2si2o7_1200_2θ_θ.csv: a '#' header, CRLF lines.
+        raw = (b"#twotheta, yobs, ycal, bkg, diff\r\n"
+               b"1.000000e+001,2.520000e+002,2.556950e+002,2.556494e+002,-3.695050e+000\r\n"
+               b"1.001000e+001,2.500000e+002,2.557850e+002,2.557393e+002,-5.785054e+000\r\n"
+               b"1.002000e+001,2.480000e+002,2.558747e+002,2.558287e+002,-7.874730e+000\r\n")
+        p = read_patterns(raw, "20261022_yb2si2o7_1200_2θ_θ.csv")[0]
+        np.testing.assert_allclose(p.x, [10.0, 10.01, 10.02])
+        np.testing.assert_array_equal(p.y, [252, 250, 248])
+        self.assertEqual(p.metadata["columns"], {"angle": "twotheta", "intensity": "yobs"})
+
+    def test_named_columns_in_other_programs_and_orders(self):
+        cases = {
+            "2Theta,Iobs,Icalc,Background,Difference\n": (0, 1),           # Profex-style
+            "Pos. [°2Th.];Iobs [cts];Icalc [cts];Iback [cts]\n": (0, 1),     # HighScore-style
+            "x,y_obs,weight,y_calc,y_bkg,Q\n": (0, 1),                       # GSAS-II CSV
+            "ycal twotheta yobs\n": (1, 2),                                  # measurement not in column 2
+            "角度,強度,計算強度,バックグラウンド\n": (0, 1),
+        }
+        for header, (angle, intensity) in cases.items():
+            with self.subTest(header=header):
+                sep = ";" if ";" in header else " " if header.startswith("ycal") else ","
+                width = len(header.strip().split(sep))
+                rows = [[10 + k + col / 10 for col in range(width)] for k in range(3)]
+                body = "".join(sep.join(f"{v:g}" for v in row) + "\n" for row in rows)
+                p = read_patterns((header + body).encode("utf-8"), "fit.csv")[0]
+                np.testing.assert_allclose(p.x, [row[angle] for row in rows])
+                np.testing.assert_allclose(p.y, [row[intensity] for row in rows])
+
+    def test_wide_rows_without_a_clear_measurement_column_are_rejected(self):
+        # No header, two intensity-like names, or a header of another width: never guess the column.
+        for raw, message in ((b"10,1,2,3\n11,1,2,3\n", "4 numeric columns. Name the angle"),
+                             (b"2theta,counts,cps,bkg\n10,1,2,3\n11,1,2,3\n", r"\(2theta, counts, cps, bkg\)"),
+                             (b"# twotheta, yobs\n10,1,2,3\n", "4 numeric columns. Name")):
+            with self.subTest(raw=raw), self.assertRaisesRegex(XRDParseError, message):
+                read_patterns(raw, "data.csv")
+        with self.assertRaisesRegex(XRDParseError, "Line 3 has 4 columns; the header names 5"):
+            read_patterns(b"#twotheta, yobs, ycal, bkg, diff\n10,1,2,3,4\n11,1,2,3\n", "fit.csv")
+
+    def test_two_and_three_column_files_read_as_before(self):
+        p = read_patterns(b"# measured on 2026-10-22\n10 3 0.5\n11 4 0.6\n", "data.xy")[0]
+        np.testing.assert_array_equal(p.y, [3, 4])
+        self.assertNotIn("columns", p.metadata)
+
     def test_utf16_and_cp932_headers(self):
         for raw in ("角度,Intensity\n10,3\n11,4\n".encode("utf-16"),
                     "角度,Intensity\n10,3\n11,4\n".encode("cp932")):

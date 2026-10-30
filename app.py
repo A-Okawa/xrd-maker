@@ -955,7 +955,7 @@ def _remap_file_session_state(old_names: list, new_names: list, key_tmpls: list)
 
 # ===== サイドバー =====
 
-st.sidebar.caption("Last updated: 2026-10-29")
+st.sidebar.caption("Last updated: 2026-10-30")
 st.sidebar.header(T["session_header"])
 st.sidebar.caption(T["project_help"])
 session_upload = st.sidebar.file_uploader(
@@ -1035,6 +1035,32 @@ if active_cif and not cif_files:
 if active_pdf and not pdf_ref_files:
     st.sidebar.caption(T["restored_pdf"] + ", ".join(f.name for f in active_pdf))
 
+def _typed_range(key):
+    """Apply 2θ limits typed in the boxes under a range slider; a range whose start is not below its end is not applied."""
+    low, high = float(st.session_state[f"_{key}_from"]), float(st.session_state[f"_{key}_to"])
+    if 0.0 <= low < high <= 180.0:
+        st.session_state[key] = (low, high)
+    else:
+        st.session_state[f"_{key}_inverted"] = True
+
+
+def range_slider_with_inputs(container, label, key, default, step):
+    """A 2θ range slider with two number boxes under it: drag the slider or type the limits.
+
+    The slider's value (``key``) stays the one setting that projects save and the figure uses;
+    the boxes show it and write typed limits back to it.
+    """
+    value = container.slider(label, 0.0, 180.0, _widget_default(key, default), step=step, key=key)
+    st.session_state[f"_{key}_from"], st.session_state[f"_{key}_to"] = (float(limit) for limit in value)
+    low_box, high_box = container.columns(2)
+    for box, suffix, box_label in ((low_box, "from", ui("下限 (°)", "From (°)")), (high_box, "to", ui("上限 (°)", "To (°)"))):
+        box.number_input(box_label, 0.0, 180.0, step=step, format="%.2f", key=f"_{key}_{suffix}",
+                         on_change=_typed_range, args=(key,))
+    if st.session_state.pop(f"_{key}_inverted", False):
+        container.warning(ui("下限は上限より小さくしてください。", "Make 'From' smaller than 'To'."))
+    return value
+
+
 st.sidebar.header(T["graph_settings"])
 if active_xrd and st.sidebar.button(T["data_range"], **FULL_WIDTH["button"]):
     _xmin = min(float(file.pattern[:, 0].min()) for file in active_xrd)
@@ -1043,7 +1069,7 @@ if active_xrd and st.sidebar.button(T["data_range"], **FULL_WIDTH["button"]):
     _xmax = min(180., np.ceil(_xmax * 2) / 2)
     if _xmin < _xmax:
         st.session_state["xrange"] = (float(_xmin), float(_xmax))
-xrange         = st.sidebar.slider(T["xrange"], 0.0, 180.0, _widget_default('xrange', (10.0, 80.0)), step=0.5, key="xrange")
+xrange         = range_slider_with_inputs(st.sidebar, T["xrange"], "xrange", (10.0, 80.0), step=0.5)
 x_min, x_max   = xrange
 normalize      = st.sidebar.checkbox(T["normalize_cb"], value=_widget_default('normalize', False, checkbox=True), key="normalize")
 if "show_legend" not in st.session_state:
@@ -1211,7 +1237,7 @@ with st.sidebar.expander(ui("ピーク注記・拡大図", "Peak annotations and
     st.caption(ui("CIFはCu Kαで計算します。hklは強いピークを優先して最大12個表示します。", "CIF patterns use Cu Kα. Up to 12 strongest hkl labels are shown."))
     annotation_font_size = st.slider(ui("注記の文字サイズ", "Annotation font size"), 5, 16, _widget_default('annotation_font_size', 8), key="annotation_font_size")
     show_zoom = st.checkbox(ui("拡大図を表示", "Show zoom inset"), key="show_zoom")
-    zoom_range = st.slider(ui("拡大する2θ範囲 (°)", "Inset 2θ range (°)"), 0., 180., _widget_default('zoom_range', (25., 35.)), step=.1, key="zoom_range")
+    zoom_range = range_slider_with_inputs(st, ui("拡大する2θ範囲 (°)", "Inset 2θ range (°)"), "zoom_range", (25., 35.), step=.1)
     zoom_location = st.selectbox(ui("拡大図の位置", "Inset position"), ["upper left", "upper right", "lower left", "lower right"],
         format_func=lambda value: {"upper left": ui("左上", "Upper left"), "upper right": ui("右上", "Upper right"), "lower left": ui("左下", "Lower left"), "lower right": ui("右下", "Lower right")}[value], key="zoom_location")
     if show_zoom and not x_min <= zoom_range[0] < zoom_range[1] <= x_max:

@@ -110,18 +110,66 @@ def _natural(value: str):
     return [int(part) if part.isdigit() else part.lower() for part in re.split(r"(\d+)", value)]
 
 
+_COMMENT_MARKERS = ("#", ";", "'", "//")
+# Columns that are not the measurement: calculated profile, background, difference, errors, weights.
+_NOT_MEASURED = re.compile(r"calc|^[yi]?cal$|bkg|back|diff|esd|sigma|err|weight|^w$|resid|^fit|model")
+_NOT_MEASURED_JA = ("計算", "バックグラウンド", "差", "誤差")
+
+
+def _split_fields(line: str) -> list[str]:
+    if "," in line or ";" in line:
+        return next(csv.reader([line], delimiter=";" if ";" in line else ","))
+    return line.split()
+
+
+def _column_role(name: str, position: int) -> str | None:
+    """'angle' or 'intensity' for a column name such as 2theta, twotheta, Angle / yobs, Iobs, Intensity, Counts.
+
+    Rietveld and profile programs write the measurement next to calculated, background and
+    difference profiles (twotheta, yobs, ycal, bkg, diff); those are never taken as the measurement.
+    """
+    text = name.strip().lower()
+    key = re.sub(r"[^a-z0-9]", "", text.replace("θ", "theta"))
+    if _NOT_MEASURED.search(key) or any(word in text for word in _NOT_MEASURED_JA):
+        return None
+    if ("2theta" in key or "twotheta" in key or key.startswith(("2th", "tth", "angle", "pos2th"))
+            or "角度" in text or (key == "x" and position == 0)):
+        return "angle"
+    if (key in {"y", "i", "obs", "int"} or key.startswith(("yobs", "iobs", "observed", "intensit", "count", "cps"))
+            or "強度" in text or "カウント" in text):
+        return "intensity"
+    return None
+
+
+def _named_columns(header: list[str] | None, width: int) -> tuple[int, int] | None:
+    """Positions of the angle and the measured intensity when a header names exactly one of each."""
+    if not header or len(header) != width:
+        return None
+    roles = [_column_role(name, position) for position, name in enumerate(header)]
+    if roles.count("angle") == 1 and roles.count("intensity") == 1:
+        return roles.index("angle"), roles.index("intensity")
+    return None
+
+
 def _read_text(data: bytes, filename: str) -> list[XRDPattern]:
     rows = []
     started = False
     ignored_header = False
+    header = None              # the last line of names before the data (a '#' comment line counts)
+    columns = None             # (angle, intensity) chosen by the header names
+    width = 0
     for lineno, original in enumerate(_text(data).splitlines(), 1):
         line = original.strip()
-        if not line or line.startswith(("#", ";", "'", "//")):
+        if not line:
+            continue
+        if line.startswith(_COMMENT_MARKERS):
+            if not started:
+                header = [name.strip() for name in _split_fields(line.lstrip("#;'/").strip())]
             continue
         # Comment tails are permitted, but arbitrary suffixes are not stripped
         # from numeric tokens ("12counts" must never silently become 12).
         line = re.split(r"\s+#", line, maxsplit=1)[0].strip()
-        fields = next(csv.reader([line], delimiter=";" if ";" in line else ",")) if ("," in line or ";" in line) else line.split()
+        fields = _split_fields(line)
         try:
             vals = [_number(v) for v in fields]
         except ValueError:
@@ -129,18 +177,33 @@ def _read_text(data: bytes, filename: str) -> list[XRDPattern]:
             if started or (not axis_header and any(re.match(r"^[+\-]?(?:\d|\.\d)", v.strip()) for v in fields)):
                 raise XRDParseError(f"Invalid numeric row at line {lineno}.")
             ignored_header = True
+            header = [name.strip() for name in fields]
             continue
         if len(vals) < 2:
             raise XRDParseError(f"Line {lineno} has only one column; two-column angle/intensity data is required.")
-        if len(vals) > 3:
+        if not started:
+            width = len(vals)
+            columns = _named_columns(header, width)
+            if columns is None and width > 3:
+                names = f" ({', '.join(header)})" if header and len(header) == width else ""
+                raise XRDParseError(
+                    f"Line {lineno} has {width} numeric columns{names}. Name the angle column (2theta) and the "
+                    "measured intensity column (yobs, Intensity or Counts) in a header, or export only those two columns.")
+        elif columns is not None and len(vals) != width:
+            raise XRDParseError(f"Line {lineno} has {len(vals)} columns; the header names {width}.")
+        if columns is None and len(vals) > 3:
             raise XRDParseError(f"Line {lineno} has more than three numeric columns; export explicit angle/intensity columns.")
         started = True
-        if np.isfinite(vals[:2]).all():
-            rows.append(vals[:2])
+        angle, intensity = columns or (0, 1)
+        if np.isfinite([vals[angle], vals[intensity]]).all():
+            rows.append([vals[angle], vals[intensity]])
     if not rows:
         raise XRDParseError("No finite two-column angle/intensity measurements were found.")
     arr = np.asarray(rows)
-    return [_pattern(filename, arr[:, 0], arr[:, 1], {"format": "XY/CSV text", "text_header_present": ignored_header})]
+    metadata = {"format": "XY/CSV text", "text_header_present": ignored_header or columns is not None}
+    if columns is not None:
+        metadata["columns"] = {"angle": header[columns[0]], "intensity": header[columns[1]]}
+    return [_pattern(filename, arr[:, 0], arr[:, 1], metadata)]
 
 
 def _header_value(line: str) -> tuple[str, str]:

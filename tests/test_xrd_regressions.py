@@ -39,7 +39,7 @@ PARSER.add_argument("--app", type=Path, default=DEFAULT_APP)
 OPTIONS, UNITTEST_ARGS = PARSER.parse_known_args()
 APP = OPTIONS.app.resolve()
 sys.path.insert(0, str(APP.parent))
-from project_io import GLOBAL_KEYS, PATTERN_KEY, encode_project, decode_project, ProjectError
+from project_io import GLOBAL_KEYS, PATTERN_KEY, MAX_PANEL_COLUMNS, encode_project, decode_project, ProjectError
 from xrd_io import read_patterns, XRDParseError
 from figure_style import (STYLE_DEFAULTS, STYLE_KEYS, FIGURE_PRESETS_MM, mm_to_inches,
     inches_to_mm, font_rcparams, apply_mpl_style, export_figure, resolve_font, validate_style_settings,
@@ -94,6 +94,7 @@ def renderer_namespace(normalize=False):
         css_font_stack=css_font_stack, FONT_FAMILIES=FONT_FAMILIES, METRIC_COMPATIBLE=METRIC_COMPATIBLE,
         PALETTES=PALETTES, PALETTE_NAMES=PALETTE_NAMES, DEFAULT_PALETTE=DEFAULT_PALETTE,
         REFERENCE_COLORS=REFERENCE_COLORS, MAX_SHADE_STEPS=MAX_SHADE_STEPS, palette_sequence=palette_sequence,
+        MAX_PANEL_COLUMNS=MAX_PANEL_COLUMNS,
         swatch_colors=swatch_colors, load_colors=load_colors, color_emoji=color_emoji, rich=rich, to_html=to_html,
         plot_style=dict(STYLE_DEFAULTS), _lang_code="ja", show_hkl=False, show_phase_markers=False,
         show_zoom=False, zoom_range=(15.,25.), zoom_location="upper left", phase_tolerance=.1, annotation_font_size=8,

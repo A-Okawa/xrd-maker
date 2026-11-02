@@ -28,9 +28,12 @@ GLOBAL_KEYS = (
     "tick_font_size", "legend_font_size", "x_label", "y_label",
     "palette", "palette_reverse", "palette_refs", "palette_steps",
     "palette_from", "palette_to", "palette_base_color",
+    "panel_columns", "panel_title_1", "panel_title_2", "panel_title_3", "panel_title_4",
 ) + tuple(STYLE_KEYS)
+# Patterns can be laid out in up to four columns of panels (each column its own stack).
+MAX_PANEL_COLUMNS = 4
 PATTERN_KEY = re.compile(
-    r"(?:vis|ord|_val_lbl|xrd_color|extra_offset|yoff|cvis|cord|_val_clbl|"
+    r"(?:vis|ord|col|_val_lbl|xrd_color|extra_offset|yoff|cvis|cord|_val_clbl|"
     r"cif_color|cref_line|pvis|pord|_val_plbl|pdf_color|pref_line)_\d+$"
 )
 BOOL_KEYS = {"normalize", "show_legend", "show_cif_legend", "show_ref_lines",
@@ -44,11 +47,11 @@ BOUNDS = {
     "label_offset_y": (-.3, 1.), "fig_width": (25 / 25.4, 20.), "fig_height": (25 / 25.4, 20.),
     "font_size": (4, 28), "tick_font_size": (4, 28), "legend_font_size": (4, 28),
     "phase_tolerance": (.01, 1.), "annotation_font_size": (5, 16), "palette_steps": (0, 12),
-    "palette_from": (1, 10000), "palette_to": (0, 10000),
+    "palette_from": (1, 10000), "palette_to": (0, 10000), "panel_columns": (1, 4),
 }
 # Axis-label, tick and legend sizes take half points (7, 6.5 pt) as in the graph app.
 INT_KEYS = {"cif_label_fontsize", "label_fontsize", "annotation_font_size", "palette_steps",
-            "palette_from", "palette_to"}
+            "palette_from", "palette_to", "panel_columns"}
 MAX_AXIS_LABEL = 500
 
 
@@ -92,7 +95,7 @@ def clean_settings(settings: dict) -> dict:
             valid = value in ("日本語", "English", "Tiếng Việt", "ไทย")
         elif key == "zoom_location":
             valid = value in ("upper left", "upper right", "lower left", "lower right")
-        elif key in ("x_label", "y_label"):
+        elif key in ("x_label", "y_label") or key.startswith("panel_title_"):
             valid = isinstance(value, str) and len(value) <= MAX_AXIS_LABEL
         elif key == "palette":
             valid = value in PALETTES
@@ -102,6 +105,8 @@ def clean_settings(settings: dict) -> dict:
             valid = type(value) is int and value in (300, 600)
         elif re.fullmatch(r"(?:ord|cord|pord)_\d+", key):
             valid = type(value) is int and 1 <= value <= 10000
+        elif re.fullmatch(r"col_\d+", key):
+            valid = type(value) is int and 1 <= value <= MAX_PANEL_COLUMNS
         elif key.startswith("_val_"):
             valid = isinstance(value, str) and len(value) <= 10000
         elif "color_" in key:

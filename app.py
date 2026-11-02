@@ -20,7 +20,7 @@ from datetime import datetime
 from pathlib import Path
 
 from project_io import (
-    GLOBAL_KEYS, PATTERN_KEY, ProjectError, encode_project, decode_project,
+    GLOBAL_KEYS, PATTERN_KEY, MAX_PANEL_COLUMNS, ProjectError, encode_project, decode_project,
     atomic_save, project_fingerprint, clean_settings,
 )
 from xrd_io import read_patterns, XRDParseError, SUPPORTED_EXTENSIONS
@@ -641,6 +641,48 @@ def pattern_display_order():
     return sorted(range(n_xrd), key=lambda i: (_int_or(state.get(f"ord_{i}"), i + 1), i))
 
 
+# ===== 列（パネル）：各列がそれぞれのパターンの重ね描き =====
+def panel_gap_inches(tick_pt):
+    """Space between two columns: room for the tick labels that meet there ("80" and "10", or "100" and "110")."""
+    return 2.2 * float(tick_pt) / 72
+
+
+def panel_wspace(n, width_in, left, right, tick_pt):
+    """That space as a fraction of a column's width (matplotlib's wspace)."""
+    gap = panel_gap_inches(tick_pt)
+    column = max((width_in * (right - left) - (n - 1) * gap) / n, 0.1)
+    return gap / column
+
+
+def panel_count():
+    """Number of columns of panels (1 = the usual single stack)."""
+    return min(max(_int_or(st.session_state.get("panel_columns"), 1), 1), MAX_PANEL_COLUMNS)
+
+
+def pattern_panel(i, n=None):
+    """Column (0-based) of pattern i; a column beyond the current count falls into the last one."""
+    n = panel_count() if n is None else n
+    return min(max(_int_or(st.session_state.get(f"col_{i}"), 1), 1), n) - 1
+
+
+def panel_groups(order):
+    """The given pattern indices split into the columns, each keeping the given order."""
+    n = panel_count()
+    return [[i for i in order if pattern_panel(i, n) == c] for c in range(n)]
+
+
+def panel_titles():
+    return [str(st.session_state.get(f"panel_title_{c + 1}") or "") for c in range(panel_count())]
+
+
+def _spread_columns():
+    """Assign the patterns to the columns in display order, the same number to each (9 in 3 columns: 3 each)."""
+    order, n = pattern_display_order(), panel_count()
+    for rank, i in enumerate(order):
+        st.session_state[f"col_{i}"] = rank * n // max(len(order), 1) + 1
+    _apply_palette()
+
+
 def palette_range(n):
     """First and last display positions (1-based, inclusive) that take the palette; the rest are the base colour.
 
@@ -687,6 +729,8 @@ def palette_plan():
     name = name if name in PALETTES else DEFAULT_PALETTE
     reverse, steps = bool(state.get("palette_reverse", False)), _int_or(state.get("palette_steps"), 0)
     patterns, refs = palette_items()
+    if panel_count() > 1:
+        return _panel_palette_plan(name, reverse, steps, refs)
     lo, hi = palette_range(len(patterns))
     shaded = patterns[lo - 1:hi]
     targets = shaded + refs if state.get("palette_refs", False) else shaded
@@ -698,6 +742,36 @@ def palette_plan():
     plan.update(zip(visible, palette_sequence(name, len(visible), reverse, steps)))
     plan.update(zip(hidden, palette_sequence(name, len(targets), reverse, steps)[len(visible):]))
     return plan, len(visible)
+
+
+def _panel_palette_plan(name, reverse, steps, refs):
+    """With several columns, the palette goes by position within each column: the k-th visible pattern of
+    every column takes the same colour (the same particle size has the same colour in each column).
+    The range (palette_from/to) counts positions within a column; references continue after the patterns."""
+    state = st.session_state
+    groups = [[(f"xrd_color_{i}", state.get(f"vis_{i}", True) is not False) for i in column]
+              for column in panel_groups(pattern_display_order())]
+    plan, shaded = {}, []
+    for group in groups:
+        lo, hi = palette_range(len(group))
+        plan.update({key: palette_base_color() for key, _ in group[:lo - 1] + group[hi:]})
+        shaded.append(group[lo - 1:hi])
+    width = max((sum(1 for _, shown in group if shown) for group in shaded), default=0)
+    ref_targets = refs if state.get("palette_refs", False) else []
+    shown_refs = [key for key, shown in ref_targets if shown]
+    total = width + len(shown_refs)
+    colors = palette_sequence(name, total, reverse, steps)
+    for group in shaded:
+        visible = [key for key, shown in group if shown]
+        hidden = [key for key, shown in group if not shown]
+        plan.update(zip(visible, colors))
+        plan.update(zip(hidden, palette_sequence(name, total + len(hidden), reverse, steps)[total:]))
+    plan.update(zip(shown_refs, colors[width:]))
+    hidden_refs = [key for key, shown in ref_targets if not shown]
+    plan.update(zip(hidden_refs, palette_sequence(name, total + len(hidden_refs), reverse, steps)[total:]))
+    if not ref_targets:
+        plan.update({key: REFERENCE_COLORS[rank % len(REFERENCE_COLORS)] for rank, (key, _) in enumerate(refs)})
+    return plan, total
 
 
 def _apply_palette():
@@ -955,7 +1029,7 @@ def _remap_file_session_state(old_names: list, new_names: list, key_tmpls: list)
 
 # ===== サイドバー =====
 
-st.sidebar.caption("Last updated: 2026-10-30")
+st.sidebar.caption("Last updated: 2026-11-02")
 st.sidebar.header(T["session_header"])
 st.sidebar.caption(T["project_help"])
 session_upload = st.sidebar.file_uploader(
@@ -1018,7 +1092,7 @@ _old_pattern_names = st.session_state.get("_xrd_pattern_names")
 if _old_pattern_names is not None and _old_pattern_names != _new_pattern_names:
     _remap_file_session_state(
         _old_pattern_names, _new_pattern_names,
-        ["vis_{}", "ord_{}", "_val_lbl_{}", "_ver_lbl_{}", "xrd_color_{}", "extra_offset_{}", "yoff_{}"],
+        ["vis_{}", "ord_{}", "col_{}", "_val_lbl_{}", "_ver_lbl_{}", "xrd_color_{}", "extra_offset_{}", "yoff_{}"],
     )
 st.session_state["_xrd_pattern_names"] = _new_pattern_names
 active_cif = [RestoredFile(n, d) for n, d in st.session_state.get("_cif_bytes", {}).items()]
@@ -1071,6 +1145,25 @@ if active_xrd and st.sidebar.button(T["data_range"], **FULL_WIDTH["button"]):
         st.session_state["xrange"] = (float(_xmin), float(_xmax))
 xrange         = range_slider_with_inputs(st.sidebar, T["xrange"], "xrange", (10.0, 80.0), step=0.5)
 x_min, x_max   = xrange
+_widget_default("panel_columns", 1)
+st.sidebar.selectbox(ui("図の列数", "Columns of panels"), list(range(1, MAX_PANEL_COLUMNS + 1)),
+                     key="panel_columns", on_change=_apply_palette,
+                     help=ui("2 以上にすると、パターン設定パネルで各パターンを置く列を選べます。列ごとに重ねて描き、リファレンスは各列の下に入ります。"
+                             "列の中の並びは表示順です（正規化して重ねると表示順 1 が一番下）。列を増やしたら図の幅も広げてください（例：2段幅 180 mm）。",
+                             "With 2 or more, choose each pattern's column in the pattern settings panel. Each column is stacked on its own, "
+                             "with the references under it. Within a column the patterns follow the display order (stacked: display order 1 "
+                             "at the bottom). Widen the figure as well (for example, double column, 180 mm)."))
+if panel_count() > 1:
+    for _c in range(panel_count()):
+        _widget_default(f"panel_title_{_c + 1}", "")
+        st.sidebar.text_input(ui("列 {n} の見出し", "Title of column {n}").format(n=_c + 1), key=f"panel_title_{_c + 1}",
+                              help=ui("各列の上に入る見出し（例：2 h）。軸のラベルと同じ書き方が使えます。空欄なら見出しなし。",
+                                      "Shown above the column (e.g. 2 h). Same markup as the axis labels; leave empty for no title."))
+    st.sidebar.button(ui("表示順で列に振り分ける", "Spread over the columns in display order"), on_click=_spread_columns,
+                      **FULL_WIDTH["button"],
+                      help=ui("表示順に、各列へ同じ数ずつ振り分けます（例：9 本を 3 列なら 3 本ずつ）。パターンごとの列はパターン設定パネルで変えられます。",
+                              "Assigns the patterns to the columns in display order, the same number to each (9 patterns in 3 columns: 3 each). "
+                              "Change single patterns in the pattern settings panel."))
 normalize      = st.sidebar.checkbox(T["normalize_cb"], value=_widget_default('normalize', False, checkbox=True), key="normalize")
 if "show_legend" not in st.session_state:
     st.session_state["show_legend"] = True
@@ -1218,6 +1311,10 @@ try:
 except ValueError as _error:
     st.sidebar.error(ui("余白の合計が100%未満になるよう調整してください。", "Adjust opposing margins so their sum is below 100%."))
     st.stop()
+# Column titles sit above the panels: keep room for them under the top edge (the margin setting itself is unchanged).
+if panel_count() > 1 and any(_title.strip() for _title in panel_titles()):
+    _title_room = (float(st.session_state.get("font_size") or 10.0) * 1.3 + 4) / 72 / fig_height
+    plot_style["margin_top"] = max(min(plot_style["margin_top"], 1 - _title_room), plot_style["margin_bottom"] + 0.05)
 
 with st.sidebar.expander(ui("作図スタイルの保存・読み込み", "Save and load figure styles")):
     st.caption(ui("寸法・線・フォント・ラベル位置を再利用できます。測定データや試料名は含みません。", "Reuse dimensions, lines, fonts and label positions. Styles do not include measurements or sample names."))
@@ -1283,20 +1380,28 @@ if active_xrd:
                             "濃淡と viridis は、一番薄い色でも白地とのコントラストが 3:1 以上（細い線の目安）になる濃さから始まります。",
                             "The graph app's palettes. Choosing one colours the visible patterns in display order. "
                             "Shades and viridis start at a colour with at least 3:1 contrast against white (the guideline for thin lines)."))
-                if len(active_xrd) >= 2:
-                    _n = len(active_xrd)
+                # With several columns the range counts positions within each column (the same position, the same colour).
+                _multi = panel_count() > 1
+                _n = max(len(g) for g in panel_groups(pattern_display_order())) if _multi else len(active_xrd)
+                if _n >= 2:
                     _lo, _hi = palette_range(_n)
                     st.session_state["_palette_range"] = (_lo, _hi)
                     st.slider(ui("色を付ける範囲（表示順）", "Coloured patterns (display order)"), min_value=1, max_value=_n,
                         step=1, key="_palette_range", on_change=_set_palette_range, args=(_n,),
                         help=ui("この範囲のパターンだけに色の組み合わせ（濃淡）を付けます。範囲外のパターン（ベースの測定など）は「範囲外の色」（初期値は黒）になります。",
                                 "Only these patterns take the palette (shades). Patterns outside the range, such as a base measurement, take the outside colour (black by default)."))
-                    _names = [plain(st.session_state.get(f"_val_lbl_{i}") or os.path.splitext(active_xrd[i].name)[0])
-                              for i in pattern_display_order()]
-                    _outside = _names[:_lo - 1] + _names[_hi:]
-                    _shaded = _names[_lo - 1:_hi]
-                    st.caption(ui("色の組み合わせ：", "Palette: ") + (f"{_shaded[0]} 〜 {_shaded[-1]}" if len(_shaded) > 1 else _shaded[0])
-                               + (ui("　／　範囲外：", "  /  outside: ") + "、".join(_outside) if _outside else ""))
+                    if _multi:
+                        _outside = _lo > 1 or _hi < _n
+                        st.caption(ui("色の組み合わせ：各列の表示順 {lo}〜{hi} 番目（どの列でも同じ番目は同じ色）",
+                                      "Palette: positions {lo}–{hi} of each column in display order (the same position, the same colour in every column)")
+                                   .format(lo=_lo, hi=_hi))
+                    else:
+                        _names = [plain(st.session_state.get(f"_val_lbl_{i}") or os.path.splitext(active_xrd[i].name)[0])
+                                  for i in pattern_display_order()]
+                        _outside = _names[:_lo - 1] + _names[_hi:]
+                        _shaded = _names[_lo - 1:_hi]
+                        st.caption(ui("色の組み合わせ：", "Palette: ") + (f"{_shaded[0]} 〜 {_shaded[-1]}" if len(_shaded) > 1 else _shaded[0])
+                                   + (ui("　／　範囲外：", "  /  outside: ") + "、".join(_outside) if _outside else ""))
                     if _outside:
                         st.color_picker(ui("範囲外の色", "Colour outside the range"), key="palette_base_color",
                                         on_change=_apply_palette,
@@ -1327,6 +1432,10 @@ if active_xrd:
                             T["display_order"], value=_widget_default(f'ord_{i}', i + 1, number=True), min_value=1, max_value=10000,
                             key=f"ord_{i}",
                         )
+                        if panel_count() > 1:
+                            st.session_state[f"col_{i}"] = pattern_panel(i) + 1
+                            st.selectbox(ui("列", "Column"), list(range(1, panel_count() + 1)), key=f"col_{i}",
+                                         on_change=_apply_palette)
                         visible = st.checkbox(T["show_cb"], value=_widget_default(f'vis_{i}', True, checkbox=True), key=f"vis_{i}")
                         label   = label_input(key=f"lbl_{i}", default=default_name)
                         chosen_color = color_picker_popover(f"xrd_color_{i}", default_hex, palette_count)
@@ -1499,37 +1608,17 @@ if active_xrd:
             hkls = None
         return x_ref, y_ref, hkls
 
-    @plt.rc_context()
-    def build_figure(show_legend=show_legend, show_cif_legend=show_cif_legend):
+    def draw_panel(ax_main, ax_ref, indices, ref_data, first, title, ticks, show_legend, show_cif_legend):
+        """One column: its patterns stacked in display order, its labels and legend, and the references under it.
+
+        Returns (main axes, prepared curves, reference peaks, legend function) for the phase markers and the inset.
+        """
         from matplotlib.ticker import MultipleLocator
-
-        refs = build_ref_list()
-        has_ref = bool(refs)
-        has_xrd = bool(active_xrd) and any(visibles)
-
-        plt.rcParams.update({**font_rcparams(plot_style), "font.size": font_size, "axes.labelsize": font_size,
-                             "xtick.labelsize": tick_font_size, "ytick.labelsize": tick_font_size,
-                             "legend.fontsize": legend_font_size, "legend.title_fontsize": legend_font_size})
-        major_len, minor_len = plot_style["tick_length"], plot_style["tick_length"] / 2
-        # Ticks of the bottom axis; between the main and reference panels they stay inward,
-        # so they do not run into the reference sticks.
-        bottom_dir = plot_style["tick_direction"]
-        if bottom_dir == "auto":
-            bottom_dir = "out" if has_ref else "in"
-        main_dir = "in" if has_ref else bottom_dir
-
-        gs = None
-        if has_ref:
-            fig = plt.figure(figsize=(fig_width, fig_height))
-            gs  = gridspec.GridSpec(2, 1, height_ratios=[2 if show_hkl else 3, 1], hspace=0.0, figure=fig)
-            ax_main = fig.add_subplot(gs[0])
-            ax_ref  = fig.add_subplot(gs[1], sharex=ax_main)
+        major_len, minor_len, main_dir, bottom_dir = ticks
+        if ax_ref is not None:
             ax_main.spines["bottom"].set_color("black")
             ax_ref.spines["top"].set_visible(False)
             ax_main.tick_params(axis="x", which="both", length=0)
-        else:
-            fig, ax_main = plt.subplots(figsize=(fig_width, fig_height))
-            ax_ref = None
 
         ax_main.xaxis.set_major_locator(MultipleLocator(major_tick))
         ax_main.tick_params(which="major", axis="x", length=major_len, direction=main_dir)
@@ -1547,54 +1636,53 @@ if active_xrd:
         prepared_curves, phase_refs = [], []
         legend_levels, legend_lines = [], []
 
-        if has_xrd:
-            for i in sort_idx:
-                if not visibles[i]:
-                    continue
-                data = active_xrd[i].pattern
-                if data is None:
-                    data = read_xrd_data(active_xrd[i].read(), active_xrd[i].name)
-                if data is None:
-                    continue
-                x, y = data[:, 0], data[:, 1]
-                mask = (x >= x_min) & (x <= x_max)
-                x, y = x[mask], y[mask]
-                if len(y) == 0:
-                    continue
+        for i in indices:
+            if not visibles[i]:
+                continue
+            data = active_xrd[i].pattern
+            if data is None:
+                data = read_xrd_data(active_xrd[i].read(), active_xrd[i].name)
+            if data is None:
+                continue
+            x, y = data[:, 0], data[:, 1]
+            mask = (x >= x_min) & (x <= x_max)
+            x, y = x[mask], y[mask]
+            if len(y) == 0:
+                continue
 
-                y_min = np.min(y)
-                y_max = max(np.max(y), 1e-9)
+            y_min = np.min(y)
+            y_max = max(np.max(y), 1e-9)
 
-                if normalize:
-                    y = y / y_max
-                    y_min_n = np.min(y)
-                    y_max = 1.0
-                    extra_off = float(st.session_state.get(f"extra_offset_{i}", 0.0))
-                    baseline  = cumulative_y + extra_off
-                    y_plot    = y + baseline
-                    side_labels.append((baseline + y_min_n + label_offset_y * (y_max - y_min_n), colors_sel[i], labels[i]))
-                    cumulative_y += global_offset * y_max
-                    legend_levels.append(baseline)
-                else:
-                    y_plot = y + abs_offsets[i]
-                    side_labels.append((abs_offsets[i] + y_min + label_offset_y * (y_max - y_min), colors_sel[i], labels[i]))
-                    legend_levels.append(abs_offsets[i])
+            if normalize:
+                y = y / y_max
+                y_min_n = np.min(y)
+                y_max = 1.0
+                extra_off = float(st.session_state.get(f"extra_offset_{i}", 0.0))
+                baseline  = cumulative_y + extra_off
+                y_plot    = y + baseline
+                side_labels.append((baseline + y_min_n + label_offset_y * (y_max - y_min_n), colors_sel[i], labels[i]))
+                cumulative_y += global_offset * y_max
+                legend_levels.append(baseline)
+            else:
+                y_plot = y + abs_offsets[i]
+                side_labels.append((abs_offsets[i] + y_min + label_offset_y * (y_max - y_min), colors_sel[i], labels[i]))
+                legend_levels.append(abs_offsets[i])
 
-                curve, = ax_main.plot(x, y_plot, color=colors_sel[i], linewidth=plot_style["line_width"], label=rich(labels[i]))
-                legend_lines.append(curve)
-                prepared_curves.append(PreparedCurve(rich(labels[i]), x, y_plot, colors_sel[i], plot_style["line_width"]))
+            curve, = ax_main.plot(x, y_plot, color=colors_sel[i], linewidth=plot_style["line_width"], label=rich(labels[i]))
+            legend_lines.append(curve)
+            prepared_curves.append(PreparedCurve(rich(labels[i]), x, y_plot, colors_sel[i], plot_style["line_width"]))
 
-                if show_peaks:
-                    pks = detect_peaks(x, y, prominence=peak_prom)
-                    ax_main.plot(x[pks], y_plot[pks], "v", color=colors_sel[i], markersize=6)
-                    for pk in pks:
-                        ax_main.annotate(
-                            f"{x[pk]:.2f}°",
-                            xy=(x[pk], y_plot[pk]),
-                            xytext=(0, 8), textcoords="offset points",
-                            ha="center", fontsize=max(font_size - 4, 7),
-                            color=colors_sel[i],
-                        )
+            if show_peaks:
+                pks = detect_peaks(x, y, prominence=peak_prom)
+                ax_main.plot(x[pks], y_plot[pks], "v", color=colors_sel[i], markersize=6)
+                for pk in pks:
+                    ax_main.annotate(
+                        f"{x[pk]:.2f}°",
+                        xy=(x[pk], y_plot[pk]),
+                        xytext=(0, 8), textcoords="offset points",
+                        ha="center", fontsize=max(font_size - 4, 7),
+                        color=colors_sel[i],
+                    )
 
         if show_side_labels:
             for y_c, col, txt in side_labels:
@@ -1617,9 +1705,13 @@ if active_xrd:
             ordered = [h for h in ordered if h.get_label() and not h.get_label().startswith("_")]
             handles, _ = ax_main.get_legend_handles_labels()
             extras = [h for h in handles if all(h is not o for o in ordered)]
-            ax_main.legend(handles=ordered + extras, loc="upper right", frameon=False)
+            if ordered or extras:
+                ax_main.legend(handles=ordered + extras, loc="upper right", frameon=False)
 
-        ax_main.set_ylabel(rich(y_title))
+        if first:
+            ax_main.set_ylabel(rich(y_title))
+        if title:
+            ax_main.set_title(rich(title), fontsize=font_size, pad=4)
         ax_main.set_yticks([])
         if show_legend:
             stacked_legend()
@@ -1630,12 +1722,11 @@ if active_xrd:
         else:
             plt.setp(ax_main.get_xticklabels(), visible=False)
 
-        if ax_ref is not None and refs:
+        if ax_ref is not None and ref_data:
             bar_height = 70.0 if show_hkl else 80.0
             row_height = 160.0 if show_hkl else 110.0
             row = 0
-            for ref in refs:
-                x_ref, y_ref, hkls = reference_data(ref)
+            for ref, x_ref, y_ref, hkls in ref_data:
                 if x_ref is None or y_ref is None or len(x_ref) == 0 or len(y_ref) == 0:
                     row += 1
                     continue
@@ -1679,160 +1770,225 @@ if active_xrd:
                 ax_ref.tick_params(which="minor", axis="x", length=minor_len, direction=bottom_dir)
 
         ax_main.set_xlim(x_min, x_max)
+        return ax_main, prepared_curves, phase_refs, stacked_legend
+
+    @plt.rc_context()
+    def build_figure(show_legend=show_legend, show_cif_legend=show_cif_legend):
+        refs = build_ref_list()
+        has_ref = bool(refs)
+        has_xrd = bool(active_xrd) and any(visibles)
+        columns = panel_groups(sort_idx)
+        titles = panel_titles() if len(columns) > 1 else [""]
+
+        plt.rcParams.update({**font_rcparams(plot_style), "font.size": font_size, "axes.labelsize": font_size,
+                             "xtick.labelsize": tick_font_size, "ytick.labelsize": tick_font_size,
+                             "legend.fontsize": legend_font_size, "legend.title_fontsize": legend_font_size})
+        major_len, minor_len = plot_style["tick_length"], plot_style["tick_length"] / 2
+        # Ticks of the bottom axis; between the main and reference panels they stay inward,
+        # so they do not run into the reference sticks.
+        bottom_dir = plot_style["tick_direction"]
+        if bottom_dir == "auto":
+            bottom_dir = "out" if has_ref else "in"
+        main_dir = "in" if has_ref else bottom_dir
+
+        # One column of panels per group of patterns (one column: the usual figure). With references,
+        # every column has the reference panel under it; the columns share the intensity scale.
+        fig = plt.figure(figsize=(fig_width, fig_height))
+        spacing = dict(hspace=0.0)
+        if len(columns) > 1:
+            spacing["wspace"] = panel_wspace(len(columns), fig_width, plot_style["margin_left"], plot_style["margin_right"], tick_font_size)
+        if has_ref:
+            gs = gridspec.GridSpec(2, len(columns), height_ratios=[2 if show_hkl else 3, 1], figure=fig, **spacing)
+        else:
+            gs = gridspec.GridSpec(1, len(columns), figure=fig, **spacing)
+        ref_data = [(ref, *reference_data(ref)) for ref in refs]
+        panels, first_main = [], None
+        for c, indices in enumerate(columns):
+            ax_main = fig.add_subplot(gs[0, c], sharey=first_main)
+            first_main = first_main or ax_main
+            ax_ref = fig.add_subplot(gs[1, c], sharex=ax_main) if has_ref else None
+            panels.append(draw_panel(ax_main, ax_ref, indices if has_xrd else [], ref_data, c == 0, titles[c],
+                                     (major_len, minor_len, main_dir, bottom_dir), show_legend, show_cif_legend))
+
         apply_mpl_style(fig, plot_style)
-        if show_phase_markers:
-            matches = match_reference_peaks(prepared_curves, phase_refs, phase_tolerance)
-            add_mpl_phase_annotations(ax_main, matches, show_hkl=False, font_size=annotation_font_size, show_legend=show_legend)
-            if show_legend:
-                stacked_legend()
-        if show_zoom and x_min <= zoom_range[0] < zoom_range[1] <= x_max:
-            add_mpl_zoom_inset(ax_main, prepared_curves, zoom_range, location=zoom_location, font_size=annotation_font_size)
+        for ax_main, prepared_curves, phase_refs, stacked_legend in panels:
+            if show_phase_markers:
+                matches = match_reference_peaks(prepared_curves, phase_refs, phase_tolerance)
+                add_mpl_phase_annotations(ax_main, matches, show_hkl=False, font_size=annotation_font_size, show_legend=show_legend)
+                if show_legend:
+                    stacked_legend()
+            if show_zoom and x_min <= zoom_range[0] < zoom_range[1] <= x_max:
+                add_mpl_zoom_inset(ax_main, prepared_curves, zoom_range, location=zoom_location, font_size=annotation_font_size)
         return fig
 
     # ===== インタラクティブ Plotly プレビュー =====
     def build_plotly_figure(show_legend=show_legend, show_cif_legend=show_cif_legend):
         refs = build_ref_list()
         has_ref = bool(refs)
+        columns = panel_groups(sort_idx)
+        n_cols = len(columns)
+        rows = 2 if has_ref else 1
 
+        layout = dict(rows=rows, cols=n_cols)
         if has_ref:
-            pfig = make_subplots(
-                rows=2, cols=1, shared_xaxes=True,
-                row_heights=[2 / 3, 1 / 3] if show_hkl else [0.75, 0.25],
-                vertical_spacing=0,
-            )
-        else:
-            pfig = make_subplots(rows=1, cols=1)
+            layout.update(shared_xaxes=True, row_heights=[2 / 3, 1 / 3] if show_hkl else [0.75, 0.25],
+                          vertical_spacing=0)
+        if n_cols > 1:
+            plot_width = fig_width * (plot_style["margin_right"] - plot_style["margin_left"])
+            layout.update(horizontal_spacing=min(0.2, panel_gap_inches(tick_font_size) / max(plot_width, 0.1)),
+                          subplot_titles=[mpl_to_plotly(t) for t in panel_titles()] + [""] * (n_cols * (rows - 1)))
+        pfig = make_subplots(**layout)
+        for annotation in pfig.layout.annotations:          # the column titles
+            annotation.font = dict(size=font_size, color="black", family=css_font_stack(plot_style["font_family"]))
 
-        cumulative_y = 0.0
-        prepared_curves, phase_refs = [], []
-        legend_levels, legend_traces = [], []
+        def axes_of(row, col):
+            number = (row - 1) * n_cols + col
+            return ("x", "y") if number == 1 else (f"x{number}", f"y{number}")
 
-        for i in sort_idx:
-            if not visibles[i]:
-                continue
-            data = active_xrd[i].pattern
-            if data is None:
-                data = read_xrd_data(active_xrd[i].read(), active_xrd[i].name)
-            if data is None:
-                continue
-            x, y = data[:, 0], data[:, 1]
-            mask = (x >= x_min) & (x <= x_max)
-            x, y = x[mask], y[mask]
-            if len(y) == 0:
-                continue
-            y_min = np.min(y)
-            y_max = max(np.max(y), 1e-9)
+        ref_data = [(ref, *reference_data(ref)) for ref in refs]
+        panels, ranked, seen = [], [], set()
+        for c, indices in enumerate(columns, start=1):
+            main_x, main_y = axes_of(1, c)
+            cumulative_y = 0.0
+            prepared_curves, phase_refs = [], []
+            legend_levels, legend_traces = [], []
 
-            if normalize:
-                y = y / y_max
-                y_min_n = np.min(y)
-                y_max = 1.0
-                extra_off = float(st.session_state.get(f"extra_offset_{i}", 0.0))
-                y_plot  = y + cumulative_y + extra_off
-                y_label = cumulative_y + extra_off + y_min_n + label_offset_y * (y_max - y_min_n)
-                legend_levels.append(cumulative_y + extra_off)
-                cumulative_y += global_offset * y_max
-            else:
-                y_plot  = y + abs_offsets[i]
-                y_label = abs_offsets[i] + y_min + label_offset_y * (y_max - y_min)
-                legend_levels.append(abs_offsets[i])
-
-            pfig.add_trace(go.Scatter(
-                x=x, y=y_plot, name=mpl_to_plotly(labels[i]),
-                line=dict(color=colors_sel[i], width=plot_style["line_width"] * 4 / 3),
-                mode="lines", showlegend=show_legend,
-            ), row=1, col=1)
-            legend_traces.append(len(pfig.data) - 1)
-            prepared_curves.append(PreparedCurve(mpl_to_plotly(labels[i]), x, y_plot, colors_sel[i], plot_style["line_width"]))
-
-            if show_peaks:
-                pks = detect_peaks(x, y, prominence=peak_prom)
-                if len(pks) > 0:
-                    pfig.add_trace(go.Scatter(
-                        x=x[pks], y=y_plot[pks],
-                        mode="markers+text",
-                        marker=dict(color=colors_sel[i], symbol="triangle-down", size=8),
-                        text=[f"{x[pk]:.2f}°" for pk in pks],
-                        textposition="top center",
-                        textfont=dict(size=max(font_size - 4, 7), color=colors_sel[i]),
-                        showlegend=False,
-                    ), row=1, col=1)
-
-            if show_side_labels:
-                x_pos = (x_min + label_offset_x) if label_side == "左" else (x_max - label_offset_x)
-                textpos = "middle right" if label_side == "左" else "middle left"
-                pfig.add_trace(go.Scatter(
-                    x=[x_pos], y=[y_label],
-                    mode="text",
-                    text=[mpl_to_plotly(labels[i])],
-                    textposition=textpos,
-                    textfont=dict(color=colors_sel[i], size=label_fontsize, family=css_font_stack(plot_style["font_family"])),
-                    showlegend=False,
-                    hoverinfo="skip",
-                ), row=1, col=1)
-
-        # Legend from top to bottom as the patterns are stacked (phase markers keep the default rank, after them).
-        for rank, k in enumerate(top_to_bottom(legend_levels), start=1):
-            pfig.data[legend_traces[k]].legendrank = rank
-
-        if has_ref and refs:
-            bar_height = 70.0 if show_hkl else 80.0
-            row_height = 160.0 if show_hkl else 110.0
-            row = 0
-            for ref in refs:
-                x_ref, y_ref, hkls = reference_data(ref)
-                if x_ref is None or y_ref is None or len(x_ref) == 0 or len(y_ref) == 0:
-                    row += 1
+            for i in indices:
+                if not visibles[i]:
                     continue
-                baseline = row * row_height
-                y_norm = y_ref / np.max(y_ref) * bar_height if np.max(y_ref) > 0 else y_ref
-                reference = ReferencePeaks(mpl_to_plotly(ref["label"]), x_ref, y_ref, hkls, ref["color"],
-                                           ["circle", "triangle", "square", "diamond"][row % 4])
-                phase_refs.append(reference)
-                vx, vy = [], []
-                for xi, yi in zip(x_ref, y_norm):
-                    vx += [float(xi), float(xi), None]
-                    vy += [float(baseline), float(baseline + yi), None]
-                pfig.add_trace(go.Scatter(
-                    x=vx, y=vy, name=mpl_to_plotly(ref["label"]),
-                    line=dict(color=ref["color"], width=plot_style["reference_line_width"] * 4 / 3),
-                    mode="lines", showlegend=False,
-                ), row=2, col=1)
-                if show_hkl and hkls:
-                    add_plotly_reference_hkl_labels(pfig, reference, baseline=baseline,
-                        scale=bar_height / np.max(y_ref) if np.max(y_ref) > 0 else 1.,
-                        font_size=annotation_font_size, xref="x2", yref="y2")
-                if show_ref_lines and ref.get("show_line", True):
-                    for xv in x_ref:
-                        pfig.add_shape(
-                            type="line",
-                            x0=float(xv), x1=float(xv),
-                            y0=0, y1=1,
-                            xref="x", yref="y domain",
-                            line=dict(color=ref["color"], width=0.7, dash="dash"),
-                            opacity=0.4,
-                            row=1, col=1,
-                        )
-                if show_cif_legend:
-                    lx = (x_min + cif_label_offset_x) if cif_label_side == "左" \
-                         else (x_max - cif_label_offset_x)
-                    textpos_cif = "middle right" if cif_label_side == "左" else "middle left"
+                data = active_xrd[i].pattern
+                if data is None:
+                    data = read_xrd_data(active_xrd[i].read(), active_xrd[i].name)
+                if data is None:
+                    continue
+                x, y = data[:, 0], data[:, 1]
+                mask = (x >= x_min) & (x <= x_max)
+                x, y = x[mask], y[mask]
+                if len(y) == 0:
+                    continue
+                y_min = np.min(y)
+                y_max = max(np.max(y), 1e-9)
+
+                if normalize:
+                    y = y / y_max
+                    y_min_n = np.min(y)
+                    y_max = 1.0
+                    extra_off = float(st.session_state.get(f"extra_offset_{i}", 0.0))
+                    y_plot  = y + cumulative_y + extra_off
+                    y_label = cumulative_y + extra_off + y_min_n + label_offset_y * (y_max - y_min_n)
+                    legend_levels.append(cumulative_y + extra_off)
+                    cumulative_y += global_offset * y_max
+                else:
+                    y_plot  = y + abs_offsets[i]
+                    y_label = abs_offsets[i] + y_min + label_offset_y * (y_max - y_min)
+                    legend_levels.append(abs_offsets[i])
+
+                # One legend for all columns: a name and colour repeated in another column is listed once.
+                name = mpl_to_plotly(labels[i])
+                entry = (name, colors_sel[i])
+                trace = go.Scatter(
+                    x=x, y=y_plot, name=name,
+                    line=dict(color=colors_sel[i], width=plot_style["line_width"] * 4 / 3),
+                    mode="lines", showlegend=show_legend and entry not in seen,
+                )
+                if n_cols > 1:
+                    trace.legendgroup = f"pattern:{name}:{colors_sel[i]}"
+                seen.add(entry)
+                pfig.add_trace(trace, row=1, col=c)
+                legend_traces.append(len(pfig.data) - 1)
+                prepared_curves.append(PreparedCurve(name, x, y_plot, colors_sel[i], plot_style["line_width"]))
+
+                if show_peaks:
+                    pks = detect_peaks(x, y, prominence=peak_prom)
+                    if len(pks) > 0:
+                        pfig.add_trace(go.Scatter(
+                            x=x[pks], y=y_plot[pks],
+                            mode="markers+text",
+                            marker=dict(color=colors_sel[i], symbol="triangle-down", size=8),
+                            text=[f"{x[pk]:.2f}°" for pk in pks],
+                            textposition="top center",
+                            textfont=dict(size=max(font_size - 4, 7), color=colors_sel[i]),
+                            showlegend=False,
+                        ), row=1, col=c)
+
+                if show_side_labels:
+                    x_pos = (x_min + label_offset_x) if label_side == "左" else (x_max - label_offset_x)
+                    textpos = "middle right" if label_side == "左" else "middle left"
                     pfig.add_trace(go.Scatter(
-                        x=[lx],
-                        y=[baseline + cif_label_offset_y * row_height],
+                        x=[x_pos], y=[y_label],
                         mode="text",
-                        text=[(["○ ", "△ ", "□ ", "◇ "][row % 4] if show_phase_markers else "") + mpl_to_plotly(ref["label"])],
-                        textposition=textpos_cif,
-                        textfont=dict(color=ref["color"], size=cif_label_fontsize, family=css_font_stack(plot_style["font_family"])),
+                        text=[name],
+                        textposition=textpos,
+                        textfont=dict(color=colors_sel[i], size=label_fontsize, family=css_font_stack(plot_style["font_family"])),
                         showlegend=False,
                         hoverinfo="skip",
-                    ), row=2, col=1)
-                row += 1
-            pfig.update_layout(yaxis2=dict(
-                range=[0, row * row_height], autorange=False,
-                showticklabels=False, showline=True, linecolor="black",
-                showgrid=False, zeroline=False,
-            ))
+                    ), row=1, col=c)
+
+            # Legend from top to bottom as the patterns are stacked, column after column
+            # (phase markers keep the default rank, after them).
+            ranked.extend(legend_traces[k] for k in top_to_bottom(legend_levels))
+
+            if has_ref and ref_data:
+                ref_x, ref_y = axes_of(2, c)
+                bar_height = 70.0 if show_hkl else 80.0
+                row_height = 160.0 if show_hkl else 110.0
+                row = 0
+                for ref, x_ref, y_ref, hkls in ref_data:
+                    if x_ref is None or y_ref is None or len(x_ref) == 0 or len(y_ref) == 0:
+                        row += 1
+                        continue
+                    baseline = row * row_height
+                    y_norm = y_ref / np.max(y_ref) * bar_height if np.max(y_ref) > 0 else y_ref
+                    reference = ReferencePeaks(mpl_to_plotly(ref["label"]), x_ref, y_ref, hkls, ref["color"],
+                                               ["circle", "triangle", "square", "diamond"][row % 4])
+                    phase_refs.append(reference)
+                    vx, vy = [], []
+                    for xi, yi in zip(x_ref, y_norm):
+                        vx += [float(xi), float(xi), None]
+                        vy += [float(baseline), float(baseline + yi), None]
+                    pfig.add_trace(go.Scatter(
+                        x=vx, y=vy, name=mpl_to_plotly(ref["label"]),
+                        line=dict(color=ref["color"], width=plot_style["reference_line_width"] * 4 / 3),
+                        mode="lines", showlegend=False,
+                    ), row=2, col=c)
+                    if show_hkl and hkls:
+                        add_plotly_reference_hkl_labels(pfig, reference, baseline=baseline,
+                            scale=bar_height / np.max(y_ref) if np.max(y_ref) > 0 else 1.,
+                            font_size=annotation_font_size, xref=ref_x, yref=ref_y)
+                    if show_ref_lines and ref.get("show_line", True):
+                        for xv in x_ref:
+                            pfig.add_shape(
+                                type="line",
+                                x0=float(xv), x1=float(xv),
+                                y0=0, y1=1,
+                                xref=main_x, yref=f"{main_y} domain",
+                                line=dict(color=ref["color"], width=0.7, dash="dash"),
+                                opacity=0.4,
+                            )
+                    if show_cif_legend:
+                        lx = (x_min + cif_label_offset_x) if cif_label_side == "左" \
+                             else (x_max - cif_label_offset_x)
+                        textpos_cif = "middle right" if cif_label_side == "左" else "middle left"
+                        pfig.add_trace(go.Scatter(
+                            x=[lx],
+                            y=[baseline + cif_label_offset_y * row_height],
+                            mode="text",
+                            text=[(["○ ", "△ ", "□ ", "◇ "][row % 4] if show_phase_markers else "") + mpl_to_plotly(ref["label"])],
+                            textposition=textpos_cif,
+                            textfont=dict(color=ref["color"], size=cif_label_fontsize, family=css_font_stack(plot_style["font_family"])),
+                            showlegend=False,
+                            hoverinfo="skip",
+                        ), row=2, col=c)
+                    row += 1
+                pfig.update_yaxes(
+                    range=[0, row * row_height], autorange=False,
+                    showticklabels=False, showline=True, linecolor="black",
+                    showgrid=False, zeroline=False, row=2, col=c,
+                )
+            panels.append((main_x, main_y, prepared_curves, phase_refs))
+
+        for rank, trace_index in enumerate(ranked, start=1):
+            pfig.data[trace_index].legendrank = rank
 
         xlabel = mpl_to_plotly(x_title)
         tick_px = plot_style["tick_length"] * 4 / 3
@@ -1850,22 +2006,21 @@ if active_xrd:
             minor=minor_cfg,
         )
         if has_ref:
-            pfig.update_xaxes(ticks=bottom_ticks, row=2, col=1)
+            pfig.update_xaxes(ticks=bottom_ticks, row=2)
             if show_minor and minor_tick:
-                pfig.update_xaxes(minor=dict(ticks=bottom_ticks, dtick=minor_tick, ticklen=tick_px / 2), row=2, col=1)
+                pfig.update_xaxes(minor=dict(ticks=bottom_ticks, dtick=minor_tick, ticklen=tick_px / 2), row=2)
         pfig.update_yaxes(
             showticklabels=False, showline=True, linecolor="black", mirror=plot_style["axes_box"],
             showgrid=False, zeroline=False,
             title_font=dict(color="black", size=font_size),
         )
-
+        # The axis title under every column; the intensity title on the first one. Columns share the intensity scale.
+        pfig.update_xaxes(title_text=xlabel, row=rows)
         if has_ref:
-            pfig.update_xaxes(title_text=xlabel, row=2, col=1)
-            pfig.update_xaxes(showticklabels=False, row=1, col=1)
-            pfig.update_yaxes(title_text=mpl_to_plotly(y_title), row=1, col=1)
-        else:
-            pfig.update_xaxes(title_text=xlabel, row=1, col=1)
-            pfig.update_yaxes(title_text=mpl_to_plotly(y_title), row=1, col=1)
+            pfig.update_xaxes(showticklabels=False, row=1)
+        pfig.update_yaxes(title_text=mpl_to_plotly(y_title), row=1, col=1)
+        for c in range(2, n_cols + 1):
+            pfig.update_yaxes(matches="y", row=1, col=c)
 
         pfig.update_layout(
             dragmode="zoom",
@@ -1883,11 +2038,14 @@ if active_xrd:
         )
         pfig.update_xaxes(linewidth=plot_style["axes_line_width"] * 4 / 3)
         pfig.update_yaxes(linewidth=plot_style["axes_line_width"] * 4 / 3)
-        if show_phase_markers:
-            matches = match_reference_peaks(prepared_curves, phase_refs, phase_tolerance)
-            add_plotly_phase_annotations(pfig, matches, show_hkl=False, font_size=annotation_font_size, show_legend=show_legend)
-        if show_zoom and x_min <= zoom_range[0] < zoom_range[1] <= x_max:
-            add_plotly_zoom_inset(pfig, prepared_curves, zoom_range, location=zoom_location, font_size=annotation_font_size)
+        for c, (main_x, main_y, prepared_curves, phase_refs) in enumerate(panels):
+            if show_phase_markers:
+                matches = match_reference_peaks(prepared_curves, phase_refs, phase_tolerance)
+                add_plotly_phase_annotations(pfig, matches, show_hkl=False, font_size=annotation_font_size,
+                                             show_legend=show_legend and c == 0, xref=main_x, yref=main_y)
+            if show_zoom and x_min <= zoom_range[0] < zoom_range[1] <= x_max:
+                add_plotly_zoom_inset(pfig, prepared_curves, zoom_range, location=zoom_location, font_size=annotation_font_size,
+                                      parent_xaxis=main_x, parent_yaxis=main_y)
         return pfig
 
     # ===== 描画 & ダウンロード =====

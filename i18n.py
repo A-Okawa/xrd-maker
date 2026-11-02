@@ -194,6 +194,31 @@ _INLINE = [
     ("From (°)", "Từ (°)", "จาก (°)"),
     ("To (°)", "Đến (°)", "ถึง (°)"),
     ("Make 'From' smaller than 'To'.", "Hãy đặt giá trị 'Từ' nhỏ hơn 'Đến'.", "กรุณาตั้งค่า 'จาก' ให้น้อยกว่า 'ถึง'"),
+    ("Columns of panels", "Số cột của hình", "จำนวนคอลัมน์ของรูป"),
+    ("With 2 or more, choose each pattern's column in the pattern settings panel. Each column is stacked on its own, "
+     "with the references under it. Within a column the patterns follow the display order (stacked: display order 1 "
+     "at the bottom). Widen the figure as well (for example, double column, 180 mm).",
+     "Khi chọn từ 2 trở lên, hãy chọn cột cho từng giản đồ trong bảng thiết lập giản đồ. Mỗi cột được xếp chồng riêng, "
+     "có các tham chiếu ở bên dưới. Trong một cột, các giản đồ theo thứ tự hiển thị (khi xếp chồng, thứ tự 1 nằm dưới cùng). "
+     "Hãy tăng cả chiều rộng hình (ví dụ khổ hai cột, 180 mm).",
+     "เมื่อเลือกตั้งแต่ 2 ขึ้นไป ให้เลือกคอลัมน์ของแต่ละแพทเทิร์นในแผงตั้งค่าแพทเทิร์น แต่ละคอลัมน์จะซ้อนแพทเทิร์นแยกกัน "
+     "และมีข้อมูลอ้างอิงอยู่ด้านล่าง ภายในคอลัมน์จะเรียงตามลำดับการแสดง (เมื่อซ้อนกัน ลำดับที่ 1 อยู่ล่างสุด) "
+     "กรุณาขยายความกว้างของรูปด้วย (เช่น ขนาดสองคอลัมน์ 180 มม.)"),
+    ("Title of column {n}", "Tiêu đề cột {n}", "หัวข้อคอลัมน์ {n}"),
+    ("Shown above the column (e.g. 2 h). Same markup as the axis labels; leave empty for no title.",
+     "Hiển thị phía trên cột (ví dụ 2 h). Cách viết giống nhãn trục; để trống thì không có tiêu đề.",
+     "แสดงเหนือคอลัมน์ (เช่น 2 h) เขียนแบบเดียวกับชื่อแกน เว้นว่างไว้หากไม่ต้องการหัวข้อ"),
+    ("Spread over the columns in display order", "Chia vào các cột theo thứ tự hiển thị", "แบ่งลงคอลัมน์ตามลำดับการแสดง"),
+    ("Assigns the patterns to the columns in display order, the same number to each (9 patterns in 3 columns: 3 each). "
+     "Change single patterns in the pattern settings panel.",
+     "Chia các giản đồ vào các cột theo thứ tự hiển thị, mỗi cột số lượng như nhau (9 giản đồ vào 3 cột: mỗi cột 3). "
+     "Có thể đổi cột của từng giản đồ trong bảng thiết lập giản đồ.",
+     "แบ่งแพทเทิร์นลงคอลัมน์ตามลำดับการแสดง คอลัมน์ละเท่า ๆ กัน (9 แพทเทิร์นใน 3 คอลัมน์: คอลัมน์ละ 3) "
+     "เปลี่ยนคอลัมน์ของแต่ละแพทเทิร์นได้ในแผงตั้งค่าแพทเทิร์น"),
+    ("Column", "Cột", "คอลัมน์"),
+    ("Palette: positions {lo}–{hi} of each column in display order (the same position, the same colour in every column)",
+     "Bảng màu: vị trí {lo}–{hi} của mỗi cột theo thứ tự hiển thị (cùng vị trí thì cùng màu ở mọi cột)",
+     "ชุดสี: ตำแหน่งที่ {lo}–{hi} ของแต่ละคอลัมน์ตามลำดับการแสดง (ตำแหน่งเดียวกันได้สีเดียวกันทุกคอลัมน์)"),
     ("Size unit", "Đơn vị kích thước", "หน่วยของขนาด"),
     ("Figure width", "Chiều rộng hình", "ความกว้างรูป"),
     ("Figure height", "Chiều cao hình", "ความสูงรูป"),

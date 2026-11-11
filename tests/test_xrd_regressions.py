@@ -45,7 +45,7 @@ from figure_style import (STYLE_DEFAULTS, STYLE_KEYS, FIGURE_PRESETS_MM, mm_to_i
     inches_to_mm, font_rcparams, apply_mpl_style, export_figure, resolve_font, validate_style_settings,
     css_font_stack, FONT_FAMILIES, METRIC_COMPATIBLE)
 from palettes import (PALETTES, PALETTE_NAMES, DEFAULT_PALETTE, REFERENCE_COLORS, MAX_SHADE_STEPS,
-    palette_sequence, swatch_colors, load_colors, color_emoji)
+    COLUMN_PALETTES, palette_sequence, swatch_colors, load_colors, color_emoji)
 from rich_text import rich, to_html
 from style_templates import encode_style_template, decode_style_template
 from project_io import clean_settings
@@ -94,7 +94,7 @@ def renderer_namespace(normalize=False):
         css_font_stack=css_font_stack, FONT_FAMILIES=FONT_FAMILIES, METRIC_COMPATIBLE=METRIC_COMPATIBLE,
         PALETTES=PALETTES, PALETTE_NAMES=PALETTE_NAMES, DEFAULT_PALETTE=DEFAULT_PALETTE,
         REFERENCE_COLORS=REFERENCE_COLORS, MAX_SHADE_STEPS=MAX_SHADE_STEPS, palette_sequence=palette_sequence,
-        MAX_PANEL_COLUMNS=MAX_PANEL_COLUMNS,
+        MAX_PANEL_COLUMNS=MAX_PANEL_COLUMNS, COLUMN_PALETTES=COLUMN_PALETTES,
         swatch_colors=swatch_colors, load_colors=load_colors, color_emoji=color_emoji, rich=rich, to_html=to_html,
         plot_style=dict(STYLE_DEFAULTS), _lang_code="ja", show_hkl=False, show_phase_markers=False,
         show_zoom=False, zoom_range=(15.,25.), zoom_location="upper left", phase_tolerance=.1, annotation_font_size=8,
@@ -169,6 +169,7 @@ if active_xrd:
         "preview_lines": [(t.name, t.line.color, list(t.x), list(t.y))
                           for t in pfig.data if t.mode == "lines" and t.xaxis == "x"],
         "session": json.loads(build_session_json(len(active_xrd), len(active_cif), len(active_pdf))),
+        "ylabel": fig.axes[0].get_ylabel(), "preview_ytitle": pfig.layout.yaxis.title.text,
         "png_header": png_bytes[:8], "tiff_header": tiff_bytes[:4],
     }
 '''

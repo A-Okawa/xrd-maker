@@ -16,7 +16,7 @@ import numpy as np
 
 APP_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(APP_DIR))
-from palettes import palette_colors
+from palettes import COLUMN_PALETTES, palette_colors
 from project_io import ProjectError, clean_settings, decode_project, encode_project
 import test_xrd_regressions as regression
 
@@ -156,6 +156,17 @@ class PaletteByPositionTests(unittest.TestCase):
             self.assertEqual(plan[f"xrd_color_{3 * column}"], "#000000")           # the base pattern of each column
             self.assertEqual([plan[f"xrd_color_{3 * column + k}"] for k in (1, 2)], shades)
 
+    def test_a_palette_for_each_column(self):
+        columns = {f"col_{k}": k // 3 + 1 for k in range(9)}
+        plan, count = self.plan({"panel_columns": 3, "palette_per_column": True, "palette_col_3": "viridis", **columns})
+        expected = [palette_colors("blues", 3), palette_colors("oranges", 3), palette_colors("viridis", 3)]
+        for column in range(3):
+            self.assertEqual([plan[f"xrd_color_{3 * column + k}"] for k in range(3)], expected[column])
+        self.assertEqual(COLUMN_PALETTES[:2], ("blues", "oranges"))
+        # Off again: the main palette for every column.
+        plan, _ = self.plan({"panel_columns": 3, "palette_per_column": False, "palette_col_3": "viridis", **columns})
+        self.assertEqual([plan[f"xrd_color_{6 + k}"] for k in range(3)], palette_colors("blues", 3))
+
     def test_one_column_keeps_the_display_order_palette(self):
         plan, count = self.plan({})
         self.assertEqual(count, 9)
@@ -164,12 +175,14 @@ class PaletteByPositionTests(unittest.TestCase):
 
 class ColumnSettingsTests(unittest.TestCase):
     def test_settings_validate_and_round_trip(self):
-        settings = {"panel_columns": 3, "panel_title_1": "2 h", "panel_title_3": "<i>t</i> = 48 h", "col_0": 3}
+        settings = {"panel_columns": 3, "panel_title_1": "2 h", "panel_title_3": "<i>t</i> = 48 h", "col_0": 3,
+                    "palette_per_column": True, "palette_col_1": "greens", "palette_col_4": "viridis"}
         self.assertEqual(clean_settings(settings), settings)
         raw = encode_project({"a.xy": b"10 1\n20 2\n"}, {}, {}, settings)
         self.assertEqual(decode_project(raw)["settings"], settings)
         for bad in ({"panel_columns": 0}, {"panel_columns": 5}, {"panel_columns": 2.0}, {"col_0": 5},
-                    {"col_0": "2"}, {"panel_title_1": 3}, {"panel_title_2": "x" * 501}):
+                    {"col_0": "2"}, {"panel_title_1": 3}, {"panel_title_2": "x" * 501},
+                    {"palette_col_2": "rainbow"}, {"palette_per_column": 1}):
             with self.subTest(bad=bad), self.assertRaises(ProjectError):
                 clean_settings(bad)
 
@@ -193,10 +206,12 @@ class ColumnUITests(unittest.TestCase):
     def test_choose_columns_spread_titles_and_save(self):
         at = run_app()
         self.assertNoException(at)
-        self.assertFalse([s for s in at.selectbox if s.key == "col_0"])          # one column: no column choice
+        self.assertFalse([r for r in at.radio if r.key == "col_0"])              # one column: no column choice
         at.selectbox(key="panel_columns").set_value(3).run()
         self.assertNoException(at)
-        self.assertEqual([at.selectbox(key=f"col_{i}").value for i in range(3)], [1, 1, 1])
+        # One row per pattern in the sidebar, the columns as radio buttons.
+        self.assertEqual([at.sidebar.radio(key=f"col_{i}").value for i in range(3)], [1, 1, 1])
+        self.assertEqual(list(at.radio(key="col_0").options), ["1", "2", "3"])
         spread = next(b for b in at.button if b.label == "表示順で列に振り分ける")
         spread.click().run()
         self.assertNoException(at)
@@ -216,15 +231,46 @@ class ColumnUITests(unittest.TestCase):
         self.assertNoException(at)
         at.selectbox(key="panel_columns").set_value(1).run()
         self.assertNoException(at)
+        self.assertFalse([r for r in at.radio if r.key == "col_0"])
         at.selectbox(key="panel_columns").set_value(3).run()
         self.assertNoException(at)
-        self.assertEqual([at.selectbox(key=f"col_{i}").value for i in range(3)], [1, 2, 3])
+        self.assertEqual([at.radio(key=f"col_{i}").value for i in range(3)], [1, 2, 3])
 
     def test_fewer_columns_fold_patterns_into_the_last(self):
         at = run_app({"panel_columns": 3, "col_0": 1, "col_1": 2, "col_2": 3})
         at.selectbox(key="panel_columns").set_value(2).run()
         self.assertNoException(at)
-        self.assertEqual([at.selectbox(key=f"col_{i}").value for i in range(3)], [1, 2, 2])
+        self.assertEqual([at.radio(key=f"col_{i}").value for i in range(3)], [1, 2, 2])
+
+    def test_picking_a_column_moves_the_pattern_and_recolours(self):
+        at = run_app({"panel_columns": 3, "col_0": 1, "col_1": 2, "col_2": 3, "palette": "blues"})
+        at.radio(key="col_2").set_value(1).run()
+        self.assertNoException(at)
+        self.assertEqual(at.session_state["col_2"], 1)
+        # Column 1 now holds patterns a and c: the first and second shades for two positions.
+        self.assertEqual([at.session_state["xrd_color_0"], at.session_state["xrd_color_2"]], palette_colors("blues", 2))
+        self.assertFalse([s for s in at.selectbox if s.key == "col_0"])          # no column box in the pattern panel
+
+    def test_palette_for_each_column_in_the_panel(self):
+        at = run_app({"panel_columns": 3, "col_0": 1, "col_1": 2, "col_2": 3, "palette": "blues"})
+        self.assertFalse([s for s in at.selectbox if s.key == "palette_col_1"])
+        at.checkbox(key="palette_per_column").check().run()
+        self.assertNoException(at)
+        self.assertEqual([at.selectbox(key=f"palette_col_{c}").value for c in (1, 2, 3)], ["blues", "oranges", "greens"])
+        self.assertEqual([at.session_state[f"xrd_color_{i}"] for i in range(3)],
+                         [palette_colors(name, 1)[0] for name in ("blues", "oranges", "greens")])
+        at.selectbox(key="palette_col_3").set_value("greys").run()
+        self.assertNoException(at)
+        self.assertEqual(at.session_state["xrd_color_2"], palette_colors("greys", 1)[0])
+        settings = at.session_state["_regression_report"]["session"]["settings"]
+        self.assertEqual((settings["palette_per_column"], settings["palette_col_3"]), (True, "greys"))
+
+
+class SidebarOrderTests(unittest.TestCase):
+    def test_saved_projects_open_under_the_pdf_cards(self):
+        source = (APP_DIR / "app.py").read_text(encoding="utf-8")
+        self.assertLess(source.index('T["pdf_upload"], type=["pdf"]'), source.index('T["load_session"], type=["json"]'))
+        self.assertLess(source.index('T["cif_upload"], type=["cif"]'), source.index('T["load_session"], type=["json"]'))
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@ from scipy.signal import find_peaks
 from collections import OrderedDict
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+import html
 import inspect
 import io
 import os
@@ -30,7 +31,7 @@ from figure_style import (
     validate_style_settings,
 )
 from palettes import (
-    PALETTES, PALETTE_NAMES, DEFAULT_PALETTE, REFERENCE_COLORS, MAX_SHADE_STEPS,
+    PALETTES, PALETTE_NAMES, DEFAULT_PALETTE, REFERENCE_COLORS, MAX_SHADE_STEPS, COLUMN_PALETTES,
     palette_sequence, swatch_colors, load_colors, color_emoji,
 )
 from rich_text import rich, to_html, plain
@@ -50,6 +51,8 @@ COLORS_FILE = Path(__file__).resolve().parent / "colors.csv"
 # Axis titles in the graph app's markup (<i>…</i>, _{…}, ^{…}); the defaults draw as before.
 DEFAULT_X_LABEL = "Diffraction angle, 2<i>θ</i> (deg.)"
 DEFAULT_Y_LABEL = "Intensity (a.u.)"
+# With normalised intensities the default y title says so; titles the user wrote are kept.
+NORMALIZED_Y_LABEL = "Normalized intensity"
 LOCAL_DATA_DIR = (Path(os.environ["XRD_MAKER_DATA_DIR"]).expanduser()
                   if LOCAL_MODE and os.environ.get("XRD_MAKER_DATA_DIR") else None)
 
@@ -675,6 +678,15 @@ def panel_titles():
     return [str(st.session_state.get(f"panel_title_{c + 1}") or "") for c in range(panel_count())]
 
 
+def _normalize_changed():
+    """Swap the default y-axis title when normalisation is switched; a title the user wrote stays as it is."""
+    current = st.session_state.get("y_label", DEFAULT_Y_LABEL)
+    if st.session_state.get("normalize") and current == DEFAULT_Y_LABEL:
+        st.session_state["y_label"] = NORMALIZED_Y_LABEL
+    elif not st.session_state.get("normalize") and current == NORMALIZED_Y_LABEL:
+        st.session_state["y_label"] = DEFAULT_Y_LABEL
+
+
 def _spread_columns():
     """Assign the patterns to the columns in display order, the same number to each (9 in 3 columns: 3 each)."""
     order, n = pattern_display_order(), panel_count()
@@ -744,6 +756,15 @@ def palette_plan():
     return plan, len(visible)
 
 
+def column_palette(c, name):
+    """Palette of column c (0-based): its own when "a palette for each column" is on, else the main one (name)."""
+    state = st.session_state
+    if not state.get("palette_per_column", False):
+        return name
+    own = state.get(f"palette_col_{c + 1}", COLUMN_PALETTES[c % len(COLUMN_PALETTES)])
+    return own if own in PALETTES else name
+
+
 def _panel_palette_plan(name, reverse, steps, refs):
     """With several columns, the palette goes by position within each column: the k-th visible pattern of
     every column takes the same colour (the same particle size has the same colour in each column).
@@ -761,11 +782,13 @@ def _panel_palette_plan(name, reverse, steps, refs):
     shown_refs = [key for key, shown in ref_targets if shown]
     total = width + len(shown_refs)
     colors = palette_sequence(name, total, reverse, steps)
-    for group in shaded:
+    for c, group in enumerate(shaded):
+        # Each column may have its own palette; the k-th position keeps the k-th colour of it.
+        own = column_palette(c, name)
         visible = [key for key, shown in group if shown]
         hidden = [key for key, shown in group if not shown]
-        plan.update(zip(visible, colors))
-        plan.update(zip(hidden, palette_sequence(name, total + len(hidden), reverse, steps)[total:]))
+        plan.update(zip(visible, palette_sequence(own, total, reverse, steps)))
+        plan.update(zip(hidden, palette_sequence(own, total + len(hidden), reverse, steps)[total:]))
     plan.update(zip(shown_refs, colors[width:]))
     hidden_refs = [key for key, shown in ref_targets if not shown]
     plan.update(zip(hidden_refs, palette_sequence(name, total + len(hidden_refs), reverse, steps)[total:]))
@@ -1029,24 +1052,7 @@ def _remap_file_session_state(old_names: list, new_names: list, key_tmpls: list)
 
 # ===== サイドバー =====
 
-st.sidebar.caption("Last updated: 2026-11-02")
-st.sidebar.header(T["session_header"])
-st.sidebar.caption(T["project_help"])
-session_upload = st.sidebar.file_uploader(
-    T["load_session"], type=["json"], key="_session_upload",
-    on_change=_open_uploaded_project,
-)
-if st.session_state.pop("_project_loaded", False):
-    st.sidebar.success(T["project_loaded"])
-if st.session_state.get("_project_error"):
-    st.sidebar.error(T["project_error"] + st.session_state["_project_error"])
-if LOCAL_DATA_DIR and (LOCAL_DATA_DIR / "autosave.json").is_file() and not any(
-    st.session_state.get(f"_{kind}_bytes") for kind in ("xrd", "cif", "pdf")
-):
-    st.sidebar.button(T["resume_local"], on_click=_open_local_autosave,
-                      **FULL_WIDTH["button"])
-st.sidebar.button(T["new_project"], on_click=_new_project, **FULL_WIDTH["button"])
-autosave_status = st.sidebar.empty()
+st.sidebar.caption("Last updated: 2026-11-12")
 
 _file_epoch = st.session_state.get("_file_epoch", 0)
 st.sidebar.header(T["xrd_data_header"])
@@ -1073,6 +1079,25 @@ pdf_ref_files = st.sidebar.file_uploader(
 for _kind in ("xrd", "cif", "pdf"):
     if st.session_state.get(f"_upload_error_{_kind}"):
         st.sidebar.error(T["duplicate_names"] + st.session_state[f"_upload_error_{_kind}"])
+
+# Saved projects open under the measurement and reference files.
+st.sidebar.header(T["session_header"])
+st.sidebar.caption(T["project_help"])
+session_upload = st.sidebar.file_uploader(
+    T["load_session"], type=["json"], key="_session_upload",
+    on_change=_open_uploaded_project,
+)
+if st.session_state.pop("_project_loaded", False):
+    st.sidebar.success(T["project_loaded"])
+if st.session_state.get("_project_error"):
+    st.sidebar.error(T["project_error"] + st.session_state["_project_error"])
+if LOCAL_DATA_DIR and (LOCAL_DATA_DIR / "autosave.json").is_file() and not any(
+    st.session_state.get(f"_{kind}_bytes") for kind in ("xrd", "cif", "pdf")
+):
+    st.sidebar.button(T["resume_local"], on_click=_open_local_autosave,
+                      **FULL_WIDTH["button"])
+st.sidebar.button(T["new_project"], on_click=_new_project, **FULL_WIDTH["button"])
+autosave_status = st.sidebar.empty()
 
 active_xrd = []
 for _source_name, _source_bytes in st.session_state.get("_xrd_bytes", {}).items():
@@ -1148,9 +1173,9 @@ x_min, x_max   = xrange
 _widget_default("panel_columns", 1)
 st.sidebar.selectbox(ui("図の列数", "Columns of panels"), list(range(1, MAX_PANEL_COLUMNS + 1)),
                      key="panel_columns", on_change=_apply_palette,
-                     help=ui("2 以上にすると、パターン設定パネルで各パターンを置く列を選べます。列ごとに重ねて描き、リファレンスは各列の下に入ります。"
+                     help=ui("2 以上にすると、下に出る一覧で各パターンを置く列を選べます。列ごとに重ねて描き、リファレンスは各列の下に入ります。"
                              "列の中の並びは表示順です（正規化して重ねると表示順 1 が一番下）。列を増やしたら図の幅も広げてください（例：2段幅 180 mm）。",
-                             "With 2 or more, choose each pattern's column in the pattern settings panel. Each column is stacked on its own, "
+                             "With 2 or more, pick each pattern's column in the list that appears below. Each column is stacked on its own, "
                              "with the references under it. Within a column the patterns follow the display order (stacked: display order 1 "
                              "at the bottom). Widen the figure as well (for example, double column, 180 mm)."))
 if panel_count() > 1:
@@ -1159,12 +1184,27 @@ if panel_count() > 1:
         st.sidebar.text_input(ui("列 {n} の見出し", "Title of column {n}").format(n=_c + 1), key=f"panel_title_{_c + 1}",
                               help=ui("各列の上に入る見出し（例：2 h）。軸のラベルと同じ書き方が使えます。空欄なら見出しなし。",
                                       "Shown above the column (e.g. 2 h). Same markup as the axis labels; leave empty for no title."))
+    st.sidebar.markdown(ui("**各パターンの列**", "**Column of each pattern**"))
+    st.sidebar.caption(ui("パターンごとに置く列を選びます（左から 1, 2, …）。列の中の並びは表示順です。",
+                          "Pick the column of each pattern (1, 2, … from the left). Within a column the patterns follow the display order."))
+    for _rank, _i in enumerate(pattern_display_order(), start=1):
+        _name = plain(st.session_state.get(f"_val_lbl_{_i}") or os.path.splitext(active_xrd[_i].name)[0])
+        st.session_state[f"col_{_i}"] = pattern_panel(_i) + 1      # a column beyond the count folds into the last
+        _name_box, _choice_box = st.sidebar.columns([2, 3])
+        _name_box.markdown(f"<div style='padding-top:0.35rem;font-size:0.85rem;overflow-wrap:anywhere'>{_rank}. "
+                           f"{html.escape(_name)}</div>", unsafe_allow_html=True)
+        _choice_box.radio(_name, list(range(1, panel_count() + 1)), key=f"col_{_i}", horizontal=True,
+                          label_visibility="collapsed", on_change=_apply_palette)
     st.sidebar.button(ui("表示順で列に振り分ける", "Spread over the columns in display order"), on_click=_spread_columns,
                       **FULL_WIDTH["button"],
-                      help=ui("表示順に、各列へ同じ数ずつ振り分けます（例：9 本を 3 列なら 3 本ずつ）。パターンごとの列はパターン設定パネルで変えられます。",
-                              "Assigns the patterns to the columns in display order, the same number to each (9 patterns in 3 columns: 3 each). "
-                              "Change single patterns in the pattern settings panel."))
-normalize      = st.sidebar.checkbox(T["normalize_cb"], value=_widget_default('normalize', False, checkbox=True), key="normalize")
+                      help=ui("表示順に、各列へ同じ数ずつ振り分けます（例：9 本を 3 列なら 3 本ずつ）。",
+                              "Assigns the patterns to the columns in display order, the same number to each (9 patterns in 3 columns: 3 each)."))
+normalize      = st.sidebar.checkbox(T["normalize_cb"], value=_widget_default('normalize', False, checkbox=True), key="normalize",
+                                     on_change=_normalize_changed,
+                                     help=ui("オンにすると、縦軸名が初期値（Intensity (a.u.)）のときは Normalized intensity に変わります。"
+                                             "自分で書いた縦軸名はそのままです。",
+                                             "Switching it on changes the default y-axis title (Intensity (a.u.)) to Normalized intensity; "
+                                             "a title you wrote stays."))
 if "show_legend" not in st.session_state:
     st.session_state["show_legend"] = True
 show_legend    = st.sidebar.checkbox(T["show_legend_cb"], key="show_legend")
@@ -1363,7 +1403,8 @@ if active_xrd:
 
     for _key, _value in (("palette", DEFAULT_PALETTE), ("palette_reverse", False),
                          ("palette_refs", False), ("palette_steps", 0),
-                         ("palette_from", 1), ("palette_to", 0), ("palette_base_color", "#000000")):
+                         ("palette_from", 1), ("palette_to", 0), ("palette_base_color", "#000000"),
+                         ("palette_per_column", False)):
         st.session_state.setdefault(_key, _value)
     if st.session_state["palette"] not in PALETTES:
         st.session_state["palette"] = DEFAULT_PALETTE
@@ -1380,6 +1421,18 @@ if active_xrd:
                             "濃淡と viridis は、一番薄い色でも白地とのコントラストが 3:1 以上（細い線の目安）になる濃さから始まります。",
                             "The graph app's palettes. Choosing one colours the visible patterns in display order. "
                             "Shades and viridis start at a colour with at least 3:1 contrast against white (the guideline for thin lines)."))
+                if panel_count() > 1:
+                    st.checkbox(ui("列ごとに色の組み合わせを変える", "A palette for each column"), key="palette_per_column",
+                        on_change=_apply_palette,
+                        help=ui("オンにすると、列ごとに色の組み合わせ（濃淡など）を選べます。上の「色の組み合わせ」はリファレンスに使います。",
+                                "Choose a palette (shades, for example) for each column. The palette above is then used for the references."))
+                    if st.session_state.get("palette_per_column"):
+                        for _c, _title in enumerate(panel_titles()):
+                            _widget_default(f"palette_col_{_c + 1}", COLUMN_PALETTES[_c % len(COLUMN_PALETTES)])
+                            st.selectbox(ui("列 {n} の色", "Column {n} palette").format(n=_c + 1)
+                                         + (f" ({plain(_title)})" if _title.strip() else ""),
+                                         list(PALETTES), key=f"palette_col_{_c + 1}",
+                                         format_func=lambda key: PALETTE_NAMES[_lang_code][key], on_change=_apply_palette)
                 # With several columns the range counts positions within each column (the same position, the same colour).
                 _multi = panel_count() > 1
                 _n = max(len(g) for g in panel_groups(pattern_display_order())) if _multi else len(active_xrd)
@@ -1392,9 +1445,14 @@ if active_xrd:
                                 "Only these patterns take the palette (shades). Patterns outside the range, such as a base measurement, take the outside colour (black by default)."))
                     if _multi:
                         _outside = _lo > 1 or _hi < _n
-                        st.caption(ui("色の組み合わせ：各列の表示順 {lo}〜{hi} 番目（どの列でも同じ番目は同じ色）",
-                                      "Palette: positions {lo}–{hi} of each column in display order (the same position, the same colour in every column)")
-                                   .format(lo=_lo, hi=_hi))
+                        if st.session_state.get("palette_per_column"):
+                            st.caption(ui("色の組み合わせ：各列の表示順 {lo}〜{hi} 番目（列ごとの色）",
+                                          "Palette: positions {lo}–{hi} of each column in display order (each column its own palette)")
+                                       .format(lo=_lo, hi=_hi))
+                        else:
+                            st.caption(ui("色の組み合わせ：各列の表示順 {lo}〜{hi} 番目（どの列でも同じ番目は同じ色）",
+                                          "Palette: positions {lo}–{hi} of each column in display order (the same position, the same colour in every column)")
+                                       .format(lo=_lo, hi=_hi))
                     else:
                         _names = [plain(st.session_state.get(f"_val_lbl_{i}") or os.path.splitext(active_xrd[i].name)[0])
                                   for i in pattern_display_order()]
@@ -1432,10 +1490,6 @@ if active_xrd:
                             T["display_order"], value=_widget_default(f'ord_{i}', i + 1, number=True), min_value=1, max_value=10000,
                             key=f"ord_{i}",
                         )
-                        if panel_count() > 1:
-                            st.session_state[f"col_{i}"] = pattern_panel(i) + 1
-                            st.selectbox(ui("列", "Column"), list(range(1, panel_count() + 1)), key=f"col_{i}",
-                                         on_change=_apply_palette)
                         visible = st.checkbox(T["show_cb"], value=_widget_default(f'vis_{i}', True, checkbox=True), key=f"vis_{i}")
                         label   = label_input(key=f"lbl_{i}", default=default_name)
                         chosen_color = color_picker_popover(f"xrd_color_{i}", default_hex, palette_count)

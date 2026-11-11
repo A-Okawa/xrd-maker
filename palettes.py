@@ -39,6 +39,8 @@ PALETTE_NAMES = {
            "tab10": "ค่าเริ่มต้นของ matplotlib"},
 }
 DEFAULT_PALETTE = "paper"
+# With a palette for each column, the columns start with these shades (left to right).
+COLUMN_PALETTES = ("blues", "oranges", "greens", "greys")
 MAX_SHADE_STEPS = 12
 MIN_CONTRAST = 3.0              # against white: the guideline for lines and other graphics
 SHADE_INTERVAL = (0.35, 0.95)   # the graph app's part of the colour map (first series, last series)

@@ -10,15 +10,68 @@ from collections import OrderedDict
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import html
+import importlib
 import inspect
 import io
 import os
 import re
+import sys
 import tempfile
 import json
 import base64
 from datetime import datetime
 from pathlib import Path
+
+
+# The app's own modules, each after the ones it imports.
+LOCAL_MODULES = ("palettes", "figure_style", "rich_text", "i18n", "xrd_io", "plot_annotations",
+                 "project_io", "style_templates", "build_bundle")
+
+
+def _file_stamp(module):
+    """(modification time, size) of the file a module was loaded from, or None."""
+    path = getattr(module, "__file__", None)
+    try:
+        info = os.stat(path) if path else None
+    except OSError:
+        return None
+    return (info.st_mtime_ns, info.st_size) if info else None
+
+
+def refresh_local_modules(names, stamps):
+    """Before the imports: load the app's own modules again when one of their files changed.
+
+    Streamlit Cloud pulls an update into the running server, and its file watcher does not always
+    unload these modules: the new app.py then ran against a module imported before the update
+    ("ImportError: cannot import name 'COLUMN_PALETTES' from 'palettes'"). *stamps* lives as long as
+    the server (record_local_modules fills it after the imports); the first time it is empty, so the
+    modules already loaded are loaded again once. As Streamlit's own watcher does, the old modules are
+    dropped from sys.modules and all of them imported afresh in import order, so modules that take names
+    from each other stay consistent and objects made from the old ones keep working. Returns the names.
+    """
+    loaded = [name for name in names if sys.modules.get(name) is not None]
+    changed = [name for name in loaded
+               if stamps.get(name) is not None and stamps[name] != _file_stamp(sys.modules[name])]
+    if "__recorded__" in stamps and not changed:
+        return []
+    for name in loaded:
+        sys.modules.pop(name, None)
+    for name in loaded:
+        importlib.import_module(name)
+    return loaded
+
+
+def record_local_modules(names, stamps):
+    """After the imports: remember the files the app's modules were loaded from."""
+    for name in names:
+        stamp = _file_stamp(sys.modules.get(name))
+        if stamp is not None:
+            stamps[name] = stamp
+    stamps["__recorded__"] = True
+
+
+_module_stamps = sys.__dict__.setdefault("_xrd_maker_module_stamps", {})
+refresh_local_modules(LOCAL_MODULES, _module_stamps)
 
 from project_io import (
     GLOBAL_KEYS, PATTERN_KEY, MAX_PANEL_COLUMNS, ProjectError, encode_project, decode_project,
@@ -44,6 +97,7 @@ from plot_annotations import (
     add_mpl_zoom_inset, add_plotly_zoom_inset,
     format_hkl_groups,
 )
+record_local_modules(LOCAL_MODULES, _module_stamps)
 
 LOCAL_MODE = os.environ.get("XRD_MAKER_LOCAL") == "1"
 # Named colours in the graph app's format; copy that app's colors.csv here to share its names.
@@ -1052,7 +1106,7 @@ def _remap_file_session_state(old_names: list, new_names: list, key_tmpls: list)
 
 # ===== サイドバー =====
 
-st.sidebar.caption("Last updated: 2026-11-12")
+st.sidebar.caption("Last updated: 2026-11-12 (2)")
 
 _file_epoch = st.session_state.get("_file_epoch", 0)
 st.sidebar.header(T["xrd_data_header"])

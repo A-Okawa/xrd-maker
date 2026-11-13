@@ -211,12 +211,19 @@ class FontTests(unittest.TestCase):
 
     def test_svg_names_arial_when_a_same_width_font_stood_in(self):
         svg = b"<text style=\"font-size: 7px; font-family: 'Liberation Sans', 'DejaVu Sans'\">a</text>"
-        from unittest.mock import patch
-        with patch("figure_style.resolve_font_family", return_value="Liberation Sans"):
+        from unittest.mock import MagicMock, patch
+
+        def resolving_to(family):
+            # Patch the module svg_font_names was imported from: a UI test that ran the app before this one
+            # leaves a newer copy of figure_style in sys.modules (the app imports its modules afresh), so
+            # patching "figure_style.resolve_font_family" by name would miss this function.
+            return patch.dict(svg_font_names.__globals__, resolve_font_family=MagicMock(return_value=family))
+
+        with resolving_to("Liberation Sans"):
             self.assertIn(b"font-family: 'Arial', 'DejaVu Sans'", svg_font_names(svg, "Arial"))
-        with patch("figure_style.resolve_font_family", return_value="DejaVu Sans"):
+        with resolving_to("DejaVu Sans"):
             self.assertEqual(svg_font_names(svg, "Arial"), svg)     # other widths: not renamed
-        with patch("figure_style.resolve_font_family", return_value="Arial"):
+        with resolving_to("Arial"):
             self.assertEqual(svg_font_names(svg, "Arial"), svg)
 
     def test_real_export_uses_one_family_for_text_and_italics(self):

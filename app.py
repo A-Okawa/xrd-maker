@@ -102,11 +102,13 @@ record_local_modules(LOCAL_MODULES, _module_stamps)
 LOCAL_MODE = os.environ.get("XRD_MAKER_LOCAL") == "1"
 # Named colours in the graph app's format; copy that app's colors.csv here to share its names.
 COLORS_FILE = Path(__file__).resolve().parent / "colors.csv"
-# Axis titles in the graph app's markup (<i>…</i>, _{…}, ^{…}); the defaults draw as before.
-DEFAULT_X_LABEL = "Diffraction angle, 2<i>θ</i> (deg.)"
+# Axis titles in the graph app's markup (<i>…</i>, _{…}, ^{…}): 2θ (°) with an italic θ.
+DEFAULT_X_LABEL = "2<i>θ</i> (°)"
 DEFAULT_Y_LABEL = "Intensity (a.u.)"
 # With normalised intensities the default y title says so; titles the user wrote are kept.
-NORMALIZED_Y_LABEL = "Normalized intensity"
+NORMALIZED_Y_LABEL = "Normalized intensity (a.u.)"
+# The normalised title before "(a.u.)" was added, as projects saved then hold it.
+EARLIER_NORMALIZED_Y_LABELS = ("Normalized intensity",)
 LOCAL_DATA_DIR = (Path(os.environ["XRD_MAKER_DATA_DIR"]).expanduser()
                   if LOCAL_MODE and os.environ.get("XRD_MAKER_DATA_DIR") else None)
 
@@ -737,7 +739,7 @@ def _normalize_changed():
     current = st.session_state.get("y_label", DEFAULT_Y_LABEL)
     if st.session_state.get("normalize") and current == DEFAULT_Y_LABEL:
         st.session_state["y_label"] = NORMALIZED_Y_LABEL
-    elif not st.session_state.get("normalize") and current == NORMALIZED_Y_LABEL:
+    elif not st.session_state.get("normalize") and current in (NORMALIZED_Y_LABEL, *EARLIER_NORMALIZED_Y_LABELS):
         st.session_state["y_label"] = DEFAULT_Y_LABEL
 
 
@@ -1106,7 +1108,7 @@ def _remap_file_session_state(old_names: list, new_names: list, key_tmpls: list)
 
 # ===== サイドバー =====
 
-st.sidebar.caption("Last updated: 2026-11-12 (2)")
+st.sidebar.caption("Last updated: 2026-11-13")
 
 _file_epoch = st.session_state.get("_file_epoch", 0)
 st.sidebar.header(T["xrd_data_header"])
@@ -1255,9 +1257,9 @@ if panel_count() > 1:
                               "Assigns the patterns to the columns in display order, the same number to each (9 patterns in 3 columns: 3 each)."))
 normalize      = st.sidebar.checkbox(T["normalize_cb"], value=_widget_default('normalize', False, checkbox=True), key="normalize",
                                      on_change=_normalize_changed,
-                                     help=ui("オンにすると、縦軸名が初期値（Intensity (a.u.)）のときは Normalized intensity に変わります。"
+                                     help=ui("オンにすると、縦軸名が初期値（Intensity (a.u.)）のときは Normalized intensity (a.u.) に変わります。"
                                              "自分で書いた縦軸名はそのままです。",
-                                             "Switching it on changes the default y-axis title (Intensity (a.u.)) to Normalized intensity; "
+                                             "Switching it on changes the default y-axis title (Intensity (a.u.)) to Normalized intensity (a.u.); "
                                              "a title you wrote stays."))
 if "show_legend" not in st.session_state:
     st.session_state["show_legend"] = True

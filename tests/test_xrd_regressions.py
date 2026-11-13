@@ -170,6 +170,8 @@ if active_xrd:
                           for t in pfig.data if t.mode == "lines" and t.xaxis == "x"],
         "session": json.loads(build_session_json(len(active_xrd), len(active_cif), len(active_pdf))),
         "ylabel": fig.axes[0].get_ylabel(), "preview_ytitle": pfig.layout.yaxis.title.text,
+        "xlabels": [a.get_xlabel() for a in fig.axes if a.get_xlabel()],
+        "preview_xtitles": [a.title.text for a in pfig.select_xaxes() if a.title.text],
         "png_header": png_bytes[:8], "tiff_header": tiff_bytes[:4],
     }
 '''

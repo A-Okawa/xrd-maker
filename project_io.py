@@ -30,6 +30,7 @@ GLOBAL_KEYS = (
     "palette_from", "palette_to", "palette_base_color",
     "panel_columns", "panel_title_1", "panel_title_2", "panel_title_3", "panel_title_4",
     "palette_per_column", "palette_col_1", "palette_col_2", "palette_col_3", "palette_col_4",
+    "auto_margin_left",
 ) + tuple(STYLE_KEYS)
 # Patterns can be laid out in up to four columns of panels (each column its own stack).
 MAX_PANEL_COLUMNS = 4
@@ -40,7 +41,7 @@ PATTERN_KEY = re.compile(
 BOOL_KEYS = {"normalize", "show_legend", "show_cif_legend", "show_ref_lines",
              "show_peaks", "show_minor", "show_side_labels", "show_panel",
              "show_phase_markers", "show_hkl", "show_zoom", "palette_reverse", "palette_refs",
-             "palette_per_column"}
+             "palette_per_column", "auto_margin_left"}
 BOUNDS = {
     "peak_prom": (.01, .5), "global_offset": (0., 3.), "major_tick": (1., 30.),
     "minor_tick": (.5, 10.), "cif_label_fontsize": (5, 20),

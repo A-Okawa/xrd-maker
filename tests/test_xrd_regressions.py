@@ -173,6 +173,7 @@ if active_xrd:
         "xlabels": [a.get_xlabel() for a in fig.axes if a.get_xlabel()],
         "preview_xtitles": [a.title.text for a in pfig.select_xaxes() if a.title.text],
         "png_header": png_bytes[:8], "tiff_header": tiff_bytes[:4],
+        "png": png_bytes, "margin_left": plot_style["margin_left"], "preview_margin_l": pfig.layout.margin.l,
     }
 '''
     return ast.unparse(tree) + "\n" + capture

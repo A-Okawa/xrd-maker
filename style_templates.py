@@ -11,6 +11,7 @@ TEMPLATE_KEYS = frozenset(STYLE_KEYS) | {
     "cif_label_side", "cif_label_fontsize", "cif_label_offset_x", "cif_label_offset_y",
     "label_side", "label_fontsize", "label_offset_x", "label_offset_y",
     "annotation_font_size", "tick_font_size", "legend_font_size", "x_label", "y_label",
+    "auto_margin_left",
 }
 MAX_TEMPLATE_BYTES = 64 * 1024
 

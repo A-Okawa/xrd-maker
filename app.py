@@ -713,6 +713,23 @@ def panel_wspace(n, width_in, left, right, tick_pt):
     return gap / column
 
 
+# ===== 左余白：縦軸名に合わせる =====
+def fitted_left_margin(fig, style, pad_in=0.1):
+    """The left margin (fraction of the width) that leaves pad_in (0.1 inch = 2.5 mm) left of what is drawn.
+
+    The intensity axis has no tick labels, so only the y-axis title needs room there; a margin set as a
+    share of the width (14 %) leaves most of it empty in a wide figure. Measured on the figure as it is
+    saved (its fonts and style), so the leftmost text ends up pad_in from the edge whatever its size;
+    the figure keeps its size and the plot takes the rest.
+    """
+    width = fig.get_size_inches()[0]
+    with plt.rc_context(font_rcparams(style)):
+        apply_mpl_style(fig, style)
+        extent = fig.get_tightbbox(fig.canvas.get_renderer())
+    margin = style["margin_left"] - (extent.x0 - pad_in) / width
+    return min(max(margin, 0.0), style["margin_right"] - 0.1)
+
+
 def panel_count():
     """Number of columns of panels (1 = the usual single stack)."""
     return min(max(_int_or(st.session_state.get("panel_columns"), 1), 1), MAX_PANEL_COLUMNS)
@@ -1049,6 +1066,12 @@ def _update_margin(key):
     st.session_state[key] = 1 - value if key in ("margin_right", "margin_top") else value
 
 
+def _auto_margin_left_changed():
+    # Setting the left margin by hand starts from the fitted one, so the figure does not jump.
+    if not st.session_state.get("auto_margin_left") and st.session_state.get("_fitted_margin_left") is not None:
+        st.session_state["margin_left"] = st.session_state["_fitted_margin_left"]
+
+
 def _new_project():
     for key in list(st.session_state):
         if ((key in GLOBAL_KEYS and key != "lang_radio") or PATTERN_KEY.fullmatch(key)
@@ -1108,7 +1131,7 @@ def _remap_file_session_state(old_names: list, new_names: list, key_tmpls: list)
 
 # ===== サイドバー =====
 
-st.sidebar.caption("Last updated: 2026-11-13")
+st.sidebar.caption("Last updated: 2026-11-26")
 
 _file_epoch = st.session_state.get("_file_epoch", 0)
 st.sidebar.header(T["xrd_data_header"])
@@ -1329,6 +1352,7 @@ else:
 st.sidebar.header(T["fig_size"])
 for _key, _value in STYLE_DEFAULTS.items():
     st.session_state.setdefault(_key, _value)
+st.session_state.setdefault("auto_margin_left", True)
 st.session_state.setdefault("fig_width", 10.0)
 st.session_state.setdefault("fig_height", 8.0)
 st.sidebar.selectbox(ui("論文図のひな形", "Publication figure preset"), list(FIGURE_PRESETS_MM),
@@ -1391,10 +1415,19 @@ with st.sidebar.expander(ui("線・フォント・余白", "Lines, fonts and mar
                  help=ui("下の軸の目盛りの向き。メインとリファレンスの境目の目盛りは、棒と重ならないように内向きのままです。",
                          "Direction of the bottom axis ticks. Ticks between the main and reference panels stay inward to avoid the sticks."))
     st.checkbox(ui("上と右の枠線を描く", "Draw the top and right frame"), key="axes_box")
+    st.checkbox(ui("左余白を縦軸名に合わせる（自動）", "Fit the left margin to the y-axis title (auto)"),
+                key="auto_margin_left", on_change=_auto_margin_left_changed,
+                help=ui("縦軸名の左に 2.5 mm だけ空けて、残りをグラフに使います。図の大きさは変わりません。"
+                        "オフにすると「左余白 (%)」で指定できます。",
+                        "Leaves 2.5 mm left of the y-axis title and gives the rest to the plot; the figure keeps its size. "
+                        "Switch it off to set the left margin (%) yourself."))
+    _auto_left_note = st.empty()    # the fitted value, once the figure is drawn
     for _key, _label in (("margin_left", ui("左余白 (%)", "Left margin (%)")),
                         ("margin_right", ui("右余白 (%)", "Right margin (%)")),
                         ("margin_bottom", ui("下余白 (%)", "Bottom margin (%)")),
                         ("margin_top", ui("上余白 (%)", "Top margin (%)"))):
+        if _key == "margin_left" and st.session_state.get("auto_margin_left"):
+            continue
         _fraction = st.session_state[_key]
         st.session_state[f"_percent_{_key}"] = round(100 * (1 - _fraction if _key in ("margin_right", "margin_top") else _fraction), 8)
         st.number_input(_label, 0., 100., step=1., key=f"_percent_{_key}", on_change=_update_margin, args=(_key,))
@@ -1883,7 +1916,8 @@ if active_xrd:
         return ax_main, prepared_curves, phase_refs, stacked_legend
 
     @plt.rc_context()
-    def build_figure(show_legend=show_legend, show_cif_legend=show_cif_legend):
+    def build_figure(show_legend=show_legend, show_cif_legend=show_cif_legend, fit_left=False):
+        """The figure to save. fit_left: the left margin as narrow as the y-axis title allows (fig.subplotpars.left)."""
         refs = build_ref_list()
         has_ref = bool(refs)
         has_xrd = bool(active_xrd) and any(visibles)
@@ -1929,6 +1963,11 @@ if active_xrd:
                     stacked_legend()
             if show_zoom and x_min <= zoom_range[0] < zoom_range[1] <= x_max:
                 add_mpl_zoom_inset(ax_main, prepared_curves, zoom_range, location=zoom_location, font_size=annotation_font_size)
+        if fit_left:
+            left = fitted_left_margin(fig, plot_style)
+            if len(columns) > 1:    # the columns keep their gaps
+                gs.update(wspace=panel_wspace(len(columns), fig_width, left, plot_style["margin_right"], tick_font_size))
+            fig.subplots_adjust(left=left)
         return fig
 
     # ===== インタラクティブ Plotly プレビュー =====
@@ -2128,7 +2167,9 @@ if active_xrd:
         pfig.update_xaxes(title_text=xlabel, row=rows)
         if has_ref:
             pfig.update_xaxes(showticklabels=False, row=1)
-        pfig.update_yaxes(title_text=mpl_to_plotly(y_title), row=1, col=1)
+        # automargin: the fitted left margin is measured on the saved figure; should the preview's title
+        # need a few pixels more, the preview makes room instead of cutting it off.
+        pfig.update_yaxes(title_text=mpl_to_plotly(y_title), automargin=True, row=1, col=1)
         for c in range(2, n_cols + 1):
             pfig.update_yaxes(matches="y", row=1, col=c)
 
@@ -2161,6 +2202,16 @@ if active_xrd:
     # ===== 描画 & ダウンロード =====
     with col_graph:
         interactive_tab, export_tab = st.tabs([T["interactive_preview"], T["export_preview"]])
+        _sl  = bool(show_legend)
+        _scl = bool(show_cif_legend)
+        _fit_left = bool(st.session_state.get("auto_margin_left"))
+        fig = build_figure(show_legend=_sl, show_cif_legend=_scl, fit_left=_fit_left)
+        if _fit_left:
+            # The saved files and the preview use the fitted margin.
+            plot_style["margin_left"] = fig.subplotpars.left
+            st.session_state["_fitted_margin_left"] = plot_style["margin_left"]
+            _auto_left_note.caption(ui("左余白（自動）：{value} %", "Left margin (auto): {value} %").format(
+                value=f"{100 * plot_style['margin_left']:.1f}"))
         pfig = build_plotly_figure()
         with interactive_tab:
             st.caption(T["drag_zoom"])
@@ -2171,9 +2222,6 @@ if active_xrd:
                 "displaylogo": False,
             })
 
-        _sl  = bool(show_legend)
-        _scl = bool(show_cif_legend)
-        fig = build_figure(show_legend=_sl, show_cif_legend=_scl)
         png_bytes = export_figure(fig, "png", 150, style=plot_style)
         pdf_bytes = export_figure(fig, "pdf", dpi_export, style=plot_style)
         svg_bytes = export_figure(fig, "svg", dpi_export, style=plot_style)

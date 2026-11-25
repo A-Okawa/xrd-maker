@@ -266,6 +266,15 @@ _INLINE = [
      "ทิศทางขีดสเกลของแกนล่าง ขีดสเกลตรงรอยต่อระหว่างกราฟหลักกับกราฟอ้างอิงจะชี้เข้าด้านในเสมอ "
      "เพื่อไม่ให้ทับเส้นพีคอ้างอิง"),
     ("Draw the top and right frame", "Vẽ khung trên và phải", "วาดกรอบด้านบนและด้านขวา"),
+    ("Fit the left margin to the y-axis title (auto)", "Căn lề trái theo tiêu đề trục y (tự động)",
+     "ปรับระยะขอบซ้ายให้พอดีกับชื่อแกน y (อัตโนมัติ)"),
+    ("Leaves 2.5 mm left of the y-axis title and gives the rest to the plot; the figure keeps its size. "
+     "Switch it off to set the left margin (%) yourself.",
+     "Chỉ chừa 2,5 mm bên trái tiêu đề trục y, phần còn lại dành cho đồ thị; kích thước hình không đổi. "
+     "Tắt để tự đặt lề trái (%).",
+     "เว้นที่ว่างทางซ้ายของชื่อแกน y เพียง 2.5 มม. และใช้พื้นที่ที่เหลือให้กราฟ ขนาดรูปไม่เปลี่ยน "
+     "ปิดตัวเลือกนี้เพื่อกำหนดระยะขอบซ้าย (%) เอง"),
+    ("Left margin (auto): {value} %", "Lề trái (tự động): {value} %", "ระยะขอบซ้าย (อัตโนมัติ): {value} %"),
     ("Left margin (%)", "Lề trái (%)", "ระยะขอบซ้าย (%)"),
     ("Right margin (%)", "Lề phải (%)", "ระยะขอบขวา (%)"),
     ("Bottom margin (%)", "Lề dưới (%)", "ระยะขอบล่าง (%)"),

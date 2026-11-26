@@ -5,6 +5,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
+from matplotlib.backends.backend_agg import FigureCanvasAgg
+from matplotlib.figure import Figure
 from scipy.signal import find_peaks
 from collections import OrderedDict
 import plotly.graph_objects as go
@@ -17,6 +19,7 @@ import os
 import re
 import sys
 import tempfile
+import threading
 import json
 import base64
 from datetime import datetime
@@ -725,9 +728,20 @@ def fitted_left_margin(fig, style, pad_in=0.1):
     width = fig.get_size_inches()[0]
     with plt.rc_context(font_rcparams(style)):
         apply_mpl_style(fig, style)
-        extent = fig.get_tightbbox(fig.canvas.get_renderer())
+        extent = fig.get_tightbbox()
     margin = style["margin_left"] - (extent.x0 - pad_in) / width
     return min(max(margin, 0.0), style["margin_right"] - 0.1)
+
+
+@st.cache_resource(show_spinner=False)
+def matplotlib_lock():
+    """One lock for the whole server, held while a figure is drawn and saved.
+
+    Streamlit runs every session's script in its own thread, and a run cut short by a newer one (a quick
+    second click) goes on drawing until it reaches its next Streamlit call. matplotlib's settings
+    (rcParams, which the figure and the saving set and restore) are shared by all those threads.
+    """
+    return threading.RLock()
 
 
 def panel_count():
@@ -1937,7 +1951,10 @@ if active_xrd:
 
         # One column of panels per group of patterns (one column: the usual figure). With references,
         # every column has the reference panel under it; the columns share the intensity scale.
-        fig = plt.figure(figsize=(fig_width, fig_height))
+        # Not through pyplot: its list of open figures is shared by all threads, and two overlapping runs
+        # could get the same figure, one closing it while the other still drew on it.
+        fig = Figure(figsize=(fig_width, fig_height))
+        FigureCanvasAgg(fig)
         spacing = dict(hspace=0.0)
         if len(columns) > 1:
             spacing["wspace"] = panel_wspace(len(columns), fig_width, plot_style["margin_left"], plot_style["margin_right"], tick_font_size)
@@ -1966,8 +1983,8 @@ if active_xrd:
         if fit_left:
             left = fitted_left_margin(fig, plot_style)
             if len(columns) > 1:    # the columns keep their gaps
-                gs.update(wspace=panel_wspace(len(columns), fig_width, left, plot_style["margin_right"], tick_font_size))
-            fig.subplots_adjust(left=left)
+                gs.wspace = panel_wspace(len(columns), fig_width, left, plot_style["margin_right"], tick_font_size)
+            fig.subplots_adjust(left=left)      # places every panel again, with that spacing
         return fig
 
     # ===== インタラクティブ Plotly プレビュー =====
@@ -2205,7 +2222,8 @@ if active_xrd:
         _sl  = bool(show_legend)
         _scl = bool(show_cif_legend)
         _fit_left = bool(st.session_state.get("auto_margin_left"))
-        fig = build_figure(show_legend=_sl, show_cif_legend=_scl, fit_left=_fit_left)
+        with matplotlib_lock():
+            fig = build_figure(show_legend=_sl, show_cif_legend=_scl, fit_left=_fit_left)
         if _fit_left:
             # The saved files and the preview use the fitted margin.
             plot_style["margin_left"] = fig.subplotpars.left
@@ -2222,14 +2240,15 @@ if active_xrd:
                 "displaylogo": False,
             })
 
-        png_bytes = export_figure(fig, "png", 150, style=plot_style)
-        pdf_bytes = export_figure(fig, "pdf", dpi_export, style=plot_style)
-        svg_bytes = export_figure(fig, "svg", dpi_export, style=plot_style)
         # Bound the in-memory raster canvas for the shared web and PC editions.
         _raster_ok = fig_width * fig_height * dpi_export ** 2 <= 36_000_000
-        png_export_bytes = export_figure(fig, "png", dpi_export, style=plot_style) if _raster_ok else None
-        tiff_bytes = export_figure(fig, "tiff", dpi_export, style=plot_style) if _raster_ok else None
-        plt.close(fig)
+        with matplotlib_lock():
+            png_bytes = export_figure(fig, "png", 150, style=plot_style)
+            pdf_bytes = export_figure(fig, "pdf", dpi_export, style=plot_style)
+            svg_bytes = export_figure(fig, "svg", dpi_export, style=plot_style)
+            png_export_bytes = export_figure(fig, "png", dpi_export, style=plot_style) if _raster_ok else None
+            tiff_bytes = export_figure(fig, "tiff", dpi_export, style=plot_style) if _raster_ok else None
+        # The figure is not registered with pyplot, so nothing needs closing: it goes with this run.
 
         with export_tab:
             st.image(png_bytes, **FULL_WIDTH_IMAGE)

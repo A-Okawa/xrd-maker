@@ -13,12 +13,14 @@ No Streamlit secrets or external files other than the selected app are read.
 import argparse
 import ast
 import copy
+import functools
 import io
 import json
 import os
 from pathlib import Path
 import re
 import sys
+import threading
 from types import SimpleNamespace
 import unittest
 
@@ -26,6 +28,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
+from matplotlib.backends.backend_agg import FigureCanvasAgg
+from matplotlib.figure import Figure
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -75,7 +79,8 @@ def peak_data(raw, two_theta_range=(5, 90)):
 def renderer_namespace(normalize=False):
     """Extract real renderers and their helper definitions; configure known inputs."""
     namespace = dict(
-        np=np, pd=pd, plt=plt, gridspec=gridspec, go=go,
+        np=np, pd=pd, plt=plt, gridspec=gridspec, go=go, Figure=Figure, FigureCanvasAgg=FigureCanvasAgg,
+        threading=threading,
         make_subplots=make_subplots, find_peaks=find_peaks,
         io=io, os=os, re=re, json=json,
         GLOBAL_KEYS=GLOBAL_KEYS, PATTERN_KEY=PATTERN_KEY,
@@ -100,7 +105,7 @@ def renderer_namespace(normalize=False):
         show_zoom=False, zoom_range=(15.,25.), zoom_location="upper left", phase_tolerance=.1, annotation_font_size=8,
         st=SimpleNamespace(session_state={
             "extra_offset_0": 0.35, "extra_offset_1": -0.2, "extra_offset_2": 1.1,
-        }, cache_data=lambda **kwargs: lambda fn: fn),
+        }, cache_data=lambda **kwargs: lambda fn: fn, cache_resource=lambda **kwargs: functools.cache),
         show_legend=True, show_cif_legend=True, normalize=normalize,
         fig_width=6.0, fig_height=4.0, font_size=10, tick_font_size=10, legend_font_size=10,
         x_title="Diffraction angle, 2<i>θ</i> (deg.)", y_title="Intensity (a.u.)",

@@ -1145,7 +1145,7 @@ def _remap_file_session_state(old_names: list, new_names: list, key_tmpls: list)
 
 # ===== サイドバー =====
 
-st.sidebar.caption("Last updated: 2026-11-26")
+st.sidebar.caption("Last updated: 2026-11-26 (2)")
 
 _file_epoch = st.session_state.get("_file_epoch", 0)
 st.sidebar.header(T["xrd_data_header"])

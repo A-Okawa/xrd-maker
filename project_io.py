@@ -30,7 +30,7 @@ GLOBAL_KEYS = (
     "palette_from", "palette_to", "palette_base_color",
     "panel_columns", "panel_title_1", "panel_title_2", "panel_title_3", "panel_title_4",
     "palette_per_column", "palette_col_1", "palette_col_2", "palette_col_3", "palette_col_4",
-    "auto_margin_left",
+    "auto_margin_left", "qc_step_tolerance", "qc_min_points",
 ) + tuple(STYLE_KEYS)
 # Patterns can be laid out in up to four columns of panels (each column its own stack).
 MAX_PANEL_COLUMNS = 4
@@ -51,10 +51,12 @@ BOUNDS = {
     "font_size": (4, 28), "tick_font_size": (4, 28), "legend_font_size": (4, 28),
     "phase_tolerance": (.01, 1.), "annotation_font_size": (5, 16), "palette_steps": (0, 12),
     "palette_from": (1, 10000), "palette_to": (0, 10000), "panel_columns": (1, 4),
+    # Data Reliability thresholds (provisional; step deviation in %, fewest points)
+    "qc_step_tolerance": (.01, 50.), "qc_min_points": (2, 100000),
 }
 # Axis-label, tick and legend sizes take half points (7, 6.5 pt) as in the graph app.
 INT_KEYS = {"cif_label_fontsize", "label_fontsize", "annotation_font_size", "palette_steps",
-            "palette_from", "palette_to", "panel_columns"}
+            "palette_from", "palette_to", "panel_columns", "qc_min_points"}
 MAX_AXIS_LABEL = 500
 
 

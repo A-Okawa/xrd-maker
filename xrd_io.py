@@ -83,8 +83,56 @@ def _pattern(filename: str, x, y, metadata: dict, index: int = 1) -> XRDPattern:
         raise XRDParseError("A scan contains NaN or infinite angle/intensity values.")
     order = np.argsort(x, kind="stable")
     meta = {"source_file": Path(filename).name, "scan_index": index,
-            "x_axis": "2theta", "x_unit": "deg", "intensity_transform": "none", **metadata}
+            "x_axis": "2theta", "x_unit": "deg", "intensity_transform": "none",
+            # What reading did to the stored order: points are sorted by angle, none is dropped or merged.
+            "points_stored": int(len(x)), "points_reordered": bool(np.any(np.diff(x) < 0)),
+            "duplicate_angles": int(np.count_nonzero(np.diff(x[order]) == 0)), **metadata}
     return XRDPattern(f"{Path(filename).stem} [scan {index}]", x[order], y[order], meta)
+
+
+def _attenuator_record(rows) -> dict:
+    """The attenuator factors stored next to the intensities (Rigaku RAS/RASX third column).
+
+    The intensities are kept as stored; this only records where a factor other than 1 was used,
+    since those points are low by that factor unless the software already applied it. Runs of
+    consecutive stored points are reported as [first, last] angles.
+    """
+    factors = [row[2] for row in rows if len(row) > 2]
+    if not factors:
+        return {"attenuator_column_present": False}
+    runs, current = [], None
+    for row in rows:
+        if len(row) > 2 and row[2] != 1:
+            current = [row[0], row[0]] if current is None else [current[0], row[0]]
+        elif current is not None:
+            runs.append(current)
+            current = None
+    if current is not None:
+        runs.append(current)
+    return {"attenuator_column_present": True,
+            "attenuator_points_not_one": sum(1 for row in rows if len(row) > 2 and row[2] != 1),
+            "attenuator_angle_runs": [[float(min(a, b)), float(max(a, b))] for a, b in runs],
+            "attenuator_factor_range": [float(min(factors)), float(max(factors))]}
+
+
+def _float_or_none(value) -> float | None:
+    try:
+        number = _number(str(value))
+    except ValueError:
+        return None
+    return number if np.isfinite(number) and number > 0 else None
+
+
+def _wavelength_record(alpha1, target) -> dict:
+    """The X-ray wavelength (Kα1, Å) and anode the file states, when it states them."""
+    record = {}
+    if alpha1 not in (None, ""):
+        value = _float_or_none(alpha1)
+        if value is not None:
+            record["wavelength_alpha1_A"] = value
+    if target not in (None, ""):
+        record["anode"] = str(target).strip()
+    return record
 
 
 def _axis_is_2theta(value: str) -> bool:
@@ -158,6 +206,7 @@ def _read_text(data: bytes, filename: str) -> list[XRDPattern]:
     header = None              # the last line of names before the data (a '#' comment line counts)
     columns = None             # (angle, intensity) chosen by the header names
     width = 0
+    dropped = []               # line numbers whose angle or intensity is NaN/infinite (not drawn)
     for lineno, original in enumerate(_text(data).splitlines(), 1):
         line = original.strip()
         if not line:
@@ -197,10 +246,14 @@ def _read_text(data: bytes, filename: str) -> list[XRDPattern]:
         angle, intensity = columns or (0, 1)
         if np.isfinite([vals[angle], vals[intensity]]).all():
             rows.append([vals[angle], vals[intensity]])
+        else:
+            dropped.append(lineno)
     if not rows:
         raise XRDParseError("No finite two-column angle/intensity measurements were found.")
     arr = np.asarray(rows)
-    metadata = {"format": "XY/CSV text", "text_header_present": ignored_header or columns is not None}
+    metadata = {"format": "XY/CSV text", "text_header_present": ignored_header or columns is not None,
+                "rows_dropped_nonfinite": dropped, "axis_named_in_file": columns is not None,
+                "columns_not_read": 0 if columns is not None else max(width - 2, 0)}
     if columns is not None:
         metadata["columns"] = {"angle": header[columns[0]], "intensity": header[columns[1]]}
     return [_pattern(filename, arr[:, 0], arr[:, 1], metadata)]
@@ -237,13 +290,15 @@ def _read_ras(data: bytes, filename: str) -> list[XRDPattern]:
             expected = header.get("MEAS_DATA_COUNT")
             if expected and int(expected) != len(rows):
                 raise XRDParseError("RAS point count does not match the recorded data (possibly truncated).")
-            arr = np.asarray(rows)
-            if not len(arr):
+            if not rows:
                 raise XRDParseError("The RAS scan contains no measurement rows.")
+            arr = np.asarray([row[:2] for row in rows])
             patterns.append(_pattern(filename, arr[:, 0], arr[:, 1],
                 {"format": "Rigaku RAS", "scan_axis": axis, "vendor_header": dict(header),
                  "intensity_unit": header.get("MEAS_SCAN_UNIT_Y", "as stored"),
-                 "attenuator_column_applied": False}, len(patterns) + 1))
+                 "attenuator_column_applied": False, **_attenuator_record(rows),
+                 **_wavelength_record(header.get("HW_XG_WAVE_LENGTH_ALPHA1"), header.get("HW_XG_TARGET_NAME"))},
+                len(patterns) + 1))
             in_data = False
         elif line.startswith("*"):
             if in_data:
@@ -255,7 +310,7 @@ def _read_ras(data: bytes, filename: str) -> list[XRDPattern]:
             vals = _values(line)
             if len(vals) not in (2, 3):
                 raise XRDParseError(f"RAS line {lineno} must contain angle, intensity and optional attenuator.")
-            rows.append(vals[:2])
+            rows.append(vals)
         else:
             raise XRDParseError(f"Unexpected text outside a RAS scan at line {lineno}.")
     if in_data:
@@ -339,9 +394,10 @@ def _read_uxd(data: bytes, filename: str) -> list[XRDPattern]:
                 raise XRDParseError("UXD angle/intensity rows contain an incomplete record.")
             arr = np.asarray(values).reshape(-1, width)
             x, y = arr[:, 0], arr[:, 1]
+        stated = {**global_header, **header}
         patterns.append(_pattern(filename, x, y, {"format": "Bruker UXD",
             "intensity_unit": "cps" if "CPS" in mode else "counts",
-            "vendor_header": {**global_header, **header}}, len(patterns) + 1))
+            "vendor_header": stated, **_wavelength_record(stated.get("WL1"), stated.get("ANODE"))}, len(patterns) + 1))
         values, mode = [], None
 
     for original in _text(data).splitlines():
@@ -560,11 +616,13 @@ def _read_rasx(z: zipfile.ZipFile, filename: str) -> list[XRDPattern]:
         if expected and int(expected) != len(rows):
             raise XRDParseError("RASX profile length does not match DataCount.")
         arr = np.asarray([row[:2] for row in rows])
+        tags = {element.tag.lower(): (element.text or "").strip() for element in root.iter()}
         patterns.append(_pattern(filename, arr[:, 0], arr[:, 1],
             {"format": "Rigaku RASX", "archive_member": path, "scan_axis": meta.get("AxisName"),
              "sample_name": root.findtext("GeneralInformation/SampleName", ""),
              "intensity_unit": meta.get("IntensityUnit", "as stored"), "vendor_header": meta,
-             "attenuator_column_applied": False}, len(patterns) + 1))
+             "attenuator_column_applied": False, **_attenuator_record(rows),
+             **_wavelength_record(tags.get("wavelengthkalpha1"), tags.get("targetname"))}, len(patterns) + 1))
     return patterns
 
 

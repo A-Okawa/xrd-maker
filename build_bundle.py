@@ -11,7 +11,7 @@ import zipfile
 
 
 BUNDLE_FILES = (
-    "app.py", "requirements.txt", "xrd_io.py", "project_io.py", "figure_style.py",
+    "app.py", "requirements.txt", "xrd_io.py", "data_quality.py", "project_io.py", "figure_style.py",
     "plot_annotations.py", "style_templates.py", "palettes.py", "rich_text.py", "i18n.py", "colors.csv",
     "fonts/LiberationSans-Regular.ttf", "fonts/LiberationSans-Bold.ttf",
     "fonts/LiberationSans-Italic.ttf", "fonts/LiberationSans-BoldItalic.ttf",

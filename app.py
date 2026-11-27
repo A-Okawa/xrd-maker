@@ -22,12 +22,15 @@ import tempfile
 import threading
 import json
 import base64
-from datetime import datetime
+from datetime import datetime, timezone
+import hashlib
+import platform
+import warnings
 from pathlib import Path
 
 
 # The app's own modules, each after the ones it imports.
-LOCAL_MODULES = ("palettes", "figure_style", "rich_text", "i18n", "xrd_io", "plot_annotations",
+LOCAL_MODULES = ("palettes", "figure_style", "rich_text", "i18n", "xrd_io", "data_quality", "plot_annotations",
                  "project_io", "style_templates", "build_bundle")
 
 
@@ -81,6 +84,7 @@ from project_io import (
     atomic_save, project_fingerprint, clean_settings,
 )
 from xrd_io import read_patterns, XRDParseError, SUPPORTED_EXTENSIONS
+import data_quality as qc
 from figure_style import (
     STYLE_DEFAULTS, STYLE_KEYS, FIGURE_PRESETS_MM, FONT_FAMILIES, METRIC_COMPATIBLE, mm_to_inches, inches_to_mm,
     font_rcparams, apply_mpl_style, export_figure, resolve_font, css_font_stack,
@@ -106,6 +110,8 @@ LOCAL_MODE = os.environ.get("XRD_MAKER_LOCAL") == "1"
 # Named colours in the graph app's format; copy that app's colors.csv here to share its names.
 COLORS_FILE = Path(__file__).resolve().parent / "colors.csv"
 # Axis titles in the graph app's markup (<i>…</i>, _{…}, ^{…}): 2θ (°) with an italic θ.
+# The version shown in the sidebar and written into figure records.
+APP_VERSION = "2026-11-27"
 DEFAULT_X_LABEL = "2<i>θ</i> (°)"
 DEFAULT_Y_LABEL = "Intensity (a.u.)"
 # With normalised intensities the default y title says so; titles the user wrote are kept.
@@ -469,10 +475,11 @@ if LOCAL_MODE:
 # ===== RestoredFile =====
 class RestoredFile:
     """セッション復元時のファイル代替オブジェクト"""
-    def __init__(self, name: str, data: bytes, pattern=None):
+    def __init__(self, name: str, data: bytes, pattern=None, metadata=None):
         self.name = name
         self._data = data
         self.pattern = pattern
+        self.metadata = metadata or {}       # what reading recorded (xrd_io), for Data Reliability
 
     def read(self) -> bytes:
         return self._data
@@ -673,6 +680,192 @@ def detect_peaks(x, y, prominence=0.1, min_dist_deg=0.5):
     dist = max(1, int(min_dist_deg / dx))
     pks, _ = find_peaks(y, prominence=prominence * np.max(y), distance=dist)
     return pks
+
+
+# ===== Data Reliability（データの点検。データは変えない） =====
+@st.cache_data(show_spinner=False)
+def pdf_card_report(pdf_bytes: bytes):
+    """What parse_pdf_card reads from a card's table, with the rows it cannot read (same rules, all angles)."""
+    if not PDFPLUMBER_AVAILABLE:
+        return {"angles": [], "skipped": 0, "error": "pdfplumber is not installed"}
+    angles, skipped = [], 0
+    try:
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            for page in pdf.pages:
+                for table in page.extract_tables():
+                    for row in table:
+                        if row is None:
+                            continue
+                        for offset in [0, 5]:
+                            if len(row) < offset + 4:
+                                continue
+                            try:
+                                int(str(row[offset]).strip())
+                            except (ValueError, TypeError):
+                                continue          # not a numbered peak row
+                            try:
+                                two_theta = float(str(row[offset + 1]).strip())
+                                float(str(row[offset + 3]).strip())
+                            except (ValueError, TypeError):
+                                skipped += 1
+                                continue
+                            angles.append(two_theta)
+    except Exception as error:
+        return {"angles": [], "skipped": 0, "error": str(error)}
+    return {"angles": angles, "skipped": skipped, "error": ""}
+
+
+@st.cache_data(show_spinner=False)
+def cif_report(cif_bytes: bytes):
+    """How many structures a CIF holds (the first is used) and the warnings pymatgen gives reading it."""
+    if not PYMATGEN_AVAILABLE:
+        return {"error": "pymatgen is not installed", "structures": 0, "warnings": []}
+    with tempfile.NamedTemporaryFile(suffix=".cif", delete=False) as tmp:
+        tmp.write(cif_bytes)
+        tmp_path = tmp.name
+    try:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            structures = CifParser(tmp_path).parse_structures(primitive=False)
+        messages = sorted({str(w.message).strip() for w in caught
+                           if issubclass(w.category, UserWarning) and str(w.message).strip()})
+        return {"error": "" if structures else "no structure", "structures": len(structures), "warnings": messages}
+    except Exception as error:
+        return {"error": str(error) or type(error).__name__, "structures": 0, "warnings": []}
+    finally:
+        os.unlink(tmp_path)
+
+
+def md_escape(value):
+    """Text shown in Markdown as written (file names and messages are not formatting)."""
+    return re.sub(r"([\\`*_\[\]<>|#])", r"\\\1", " ".join(str(value).split()))
+
+
+def markdown_table(columns, rows):
+    cell = lambda value: md_escape(value) or " "
+    lines = ["| " + " | ".join(cell(c) for c in columns) + " |", "|" + "---|" * len(columns)]
+    lines += ["| " + " | ".join(cell(v) for v in row) + " |" for row in rows]
+    return "\n".join(lines)
+
+
+def qc_text(check):
+    """A check in the screen language: what was checked, the criterion, what was found, what to check."""
+    v = check.values
+    code, status = check.code, check.status
+    none = ui("なし", "None")
+    if code == "read":
+        return (ui("ファイルの読み込み", "Reading the file"), ui("読める", "Can be read"), v["error"],
+                ui("測定ソフトから XY/CSV などで書き出し直してください。", "Export the measurement again, for example as XY/CSV."))
+    if code == "finite":
+        found = (ui("{count} 行を除外して描いています（行番号 {rows}）。", "{count} rows are left out of the figure (lines {rows}).").format(**v)
+                 if status == qc.WARNING else none)
+        return (ui("数値でない値（NaN・無限大）", "Values that are not numbers (NaN, infinity)"), none, found,
+                ui("元のファイルの該当行を確認してください。", "Check those lines in the original file."))
+    if code == "columns":
+        found = (ui("見出しのない3列目以降（{count} 列）を読んでいません。1列目を 2θ、2列目を強度として描いています。",
+                    "{count} unnamed columns after the second are not read: column 1 is drawn as 2θ, column 2 as intensity.").format(**v)
+                 if status == qc.CAUTION else none)
+        return (ui("読んでいない列", "Columns not read"), none, found,
+                ui("3列目が強度やアッテネータ係数なら、列名を付けて書き出してください。",
+                   "If the third column is the intensity or an attenuator factor, export the file with column names."))
+    if code == "axis":
+        found = (ui("ファイルで確認しました。", "Stated in the file.") if status == qc.PASS else
+                 ui("列名がないため、1列目を 2θ（度）とみなしています。", "With no column names, column 1 is taken as 2θ in degrees."))
+        return (ui("横軸が 2θ か", "Whether the x axis is 2θ"),
+                ui("ファイルに 2θ の列名か走査軸の記載がある", "The file names a 2θ column or scan axis"), found,
+                ui("d 値や q のデータでないか確認してください。", "Make sure the data are not d-spacings or q."))
+    if code == "attenuator":
+        found = (ui("{count} 点が 1 以外です（係数 {low:g}–{high:g}、{runs}°）。強度は保存された値のままで、補正していません。",
+                    "{count} points have a factor other than 1 ({low:g}–{high:g}, at {runs}°). Intensities are drawn as stored, not corrected.").format(**v)
+                 if status == qc.WARNING else ui("すべての点で 1 です。", "1 at every point."))
+        return (ui("アッテネータ係数", "Attenuator factors"), ui("すべての点で 1", "1 at every point"), found,
+                ui("測定ソフトで補正済みか確認し、未補正なら補正後の強度で書き出してください。",
+                   "Check whether the measuring software applied them; if not, export corrected intensities."))
+    if code == "angle_range":
+        found = (ui("{count} 点が 0–180° の外です（{low:.3f}–{high:.3f}°）。", "{count} points lie outside 0–180° ({low:.3f}–{high:.3f}°).").format(**v)
+                 if status == qc.WARNING else "{low:.3f}–{high:.3f}°".format(**v))
+        return (ui("2θ の範囲", "2θ range"), "0–180°", found,
+                ui("横軸が 2θ（度）か確認してください。", "Make sure the x axis is 2θ in degrees."))
+    if code == "order":
+        parts = []
+        if v["reordered"]:
+            parts.append(ui("角度順でなかったため、並べ替えて描いています。", "The points were not in angle order and are drawn sorted."))
+        if v["duplicates"]:
+            parts.append(ui("同じ角度の点が {duplicates} か所あります。", "{duplicates} angles occur more than once.").format(**v))
+        return (ui("角度の並び", "Order of the angles"),
+                ui("角度順で、同じ角度の点がない", "In angle order, each angle once"), " ".join(parts) or none,
+                ui("つないだ測定や重複した行がないか確認してください。", "Check for joined scans or repeated rows."))
+    if code == "negative":
+        found = (ui("{count} 点（最小 {low:g}）。", "{count} points (lowest {low:g}).").format(**v) if status == qc.CAUTION else none)
+        return (ui("負の強度", "Negative intensities"), none, found,
+                ui("バックグラウンドを引いたデータなら問題ありません。", "Expected if a background has been subtracted."))
+    if code == "points":
+        return (ui("データ点数", "Number of points"),
+                ui("{minimum} 点以上（暫定）", "At least {minimum} (provisional)").format(**v),
+                ui("{count} 点", "{count} points").format(**v),
+                ui("点数が少ないと、ピーク検出や照合は意味を持ちません。", "With few points, peak detection and matching mean little."))
+    if code == "step":
+        criterion = ui("中央値からのずれが {tolerance:g} % 以内（暫定）", "Within {tolerance:g} % of the median (provisional)").format(**v)
+        if status == qc.NOT_EVALUATED:
+            found = ui("点数が足りません。", "Too few points.")
+        elif status == qc.CAUTION:
+            found = ui("{count} か所でずれています（最大 {largest:.1f} %、最初は {first:.3f}° 付近）。中央値 {median:.4f}°。",
+                       "Uneven at {count} places (up to {largest:.1f} %, first near {first:.3f}°); median {median:.4f}°.").format(**v)
+        else:
+            found = ui("中央値 {median:.4f}°", "Median {median:.4f}°").format(**v)
+        return (ui("ステップ幅", "Step width"), criterion, found,
+                ui("つないだ測定や欠けた区間がないか確認してください。ピーク検出の最小間隔は平均ステップで換算しています。",
+                   "Check for joined scans or gaps. Peak detection converts its minimum spacing with the mean step."))
+    if code == "wavelength":
+        criterion = ui("リファレンスは Cu Kα（{cif} Å）で計算・照合", "References are calculated and matched for Cu Kα ({cif} Å)").format(**v)
+        stated = f"{v['wavelength']} {v['anode']}".strip()
+        if status == qc.NOT_EVALUATED:
+            found = ui("ファイルに波長の記載がありません。", "The file does not state the wavelength.")
+        elif status == qc.WARNING:
+            found = ui("Cu Kα 以外です（{stated}）。CIF の棒と照合記号は Cu Kα の角度にあります。",
+                       "Not Cu Kα ({stated}). The CIF sticks and matching marks are at Cu Kα angles.").format(stated=stated)
+        else:
+            found = stated
+        return (ui("測定波長", "Wavelength"), criterion, found,
+                ui("Cu 以外の測定に CIF を重ねるときは、波長の違いを考慮してください。",
+                   "When overlaying CIF references on a non-Cu measurement, allow for the wavelength."))
+    if code == "display":
+        if status == qc.WARNING:
+            found = ui("範囲内の最大値が 0 以下のため、正規化の値が意味を持ちません（最大 {high:g}）。",
+                       "The maximum in the range is 0 or below, so the normalised values mean nothing (maximum {high:g}).").format(**v)
+        elif status == qc.CAUTION:
+            found = ui("表示中の 2θ 範囲に点がなく、描いていません。", "No points in the 2θ range shown; not drawn.")
+        else:
+            found = ui("{count} 点を描いています。", "{count} points drawn.").format(**v)
+        return (ui("表示範囲と正規化", "Range shown and normalisation"),
+                ui("範囲内に点があり、正規化の最大値が正", "Points in the range; a positive maximum to normalise by"), found,
+                ui("2θ 範囲と正規化の設定を確認してください。", "Check the 2θ range and the normalisation."))
+    if code == "pdf_read":
+        if status == qc.FAIL:
+            found = ui("ピークを1本も読めませんでした。", "No peak could be read.")
+        elif status == qc.WARNING:
+            found = ui("{total} 本を読み、{skipped} 行を読めませんでした。", "{total} peaks read; {skipped} rows could not be read.").format(**v)
+        else:
+            found = ui("{total} 本", "{total} peaks").format(**v)
+        return (ui("PDF カードの読み取り", "Reading the PDF card"), ui("番号付きの行をすべて読める", "Every numbered row can be read"), found,
+                ui("カードの表と、描かれた棒の本数を見比べてください。", "Compare the card's table with the sticks drawn."))
+    if code == "in_range":
+        found = (ui("表示中の 2θ 範囲にピークがありません。", "No peak in the 2θ range shown.") if status == qc.CAUTION
+                 else ui("{count} 本", "{count} peaks").format(**v))
+        return (ui("表示範囲内のピーク", "Peaks in the range shown"), ui("1 本以上", "At least one"), found, "")
+    if code == "cif_read":
+        found = (ui("読めませんでした：{error}", "Could not be read: {error}").format(**v) if status == qc.FAIL
+                 else ui("Cu Kα（{cif} Å）で計算しています。", "Calculated for Cu Kα ({cif} Å).").format(**v))
+        return (ui("CIF の読み取り", "Reading the CIF"), ui("pymatgen で読める", "pymatgen can read it"), found, "")
+    if code == "cif_structures":
+        found = (ui("{count} 個の構造があり、最初の構造だけを使っています。", "{count} structures; only the first is used.").format(**v)
+                 if status == qc.CAUTION else ui("1 個", "One"))
+        return (ui("CIF の構造の数", "Structures in the CIF"), ui("1 個", "One"), found, "")
+    if code == "cif_warnings":
+        found = ui("{count} 件：{messages}", "{count}: {messages}").format(**v) if status == qc.CAUTION else none
+        return (ui("pymatgen の警告", "Warnings from pymatgen"), none, found,
+                ui("占有率や対称性の扱いが CIF の意図どおりか確認してください。", "Check that occupancies and symmetry are read as the CIF intends."))
+    return (code, "", "", "")
 
 
 # ===== 色（グラフ描画appと同じ色の組み合わせ） =====
@@ -984,12 +1177,17 @@ for _key in list(st.session_state):
         st.session_state[_key] = st.session_state[_key]
 
 
-def build_session_json(n_xrd: int, n_cif: int, n_pdf: int) -> bytes:
+def project_settings() -> dict:
+    """The settings a project saves (also written into the figure record)."""
     # The screen language is recorded only as Japanese or English: earlier versions of the app accept
     # only these, so a project saved on a Vietnamese or Thai screen still opens there.
-    settings = {key: value for key, value in st.session_state.items()
-                if (key in GLOBAL_KEYS or PATTERN_KEY.fullmatch(key))
-                and (key != "lang_radio" or value in ("日本語", "English"))}
+    return {key: value for key, value in st.session_state.items()
+            if (key in GLOBAL_KEYS or PATTERN_KEY.fullmatch(key))
+            and (key != "lang_radio" or value in ("日本語", "English"))}
+
+
+def build_session_json(n_xrd: int, n_cif: int, n_pdf: int) -> bytes:
+    settings = project_settings()
     return encode_project(
         st.session_state.get("_xrd_bytes", {}),
         st.session_state.get("_cif_bytes", {}),
@@ -1145,7 +1343,7 @@ def _remap_file_session_state(old_names: list, new_names: list, key_tmpls: list)
 
 # ===== サイドバー =====
 
-st.sidebar.caption("Last updated: 2026-11-26 (2)")
+st.sidebar.caption(f"Last updated: {APP_VERSION}")
 
 _file_epoch = st.session_state.get("_file_epoch", 0)
 st.sidebar.header(T["xrd_data_header"])
@@ -1193,6 +1391,7 @@ st.sidebar.button(T["new_project"], on_click=_new_project, **FULL_WIDTH["button"
 autosave_status = st.sidebar.empty()
 
 active_xrd = []
+xrd_read_errors = []        # (file, message): shown as FAIL in Data Reliability
 for _source_name, _source_bytes in st.session_state.get("_xrd_bytes", {}).items():
     try:
         _patterns = read_patterns(_source_bytes, _source_name)
@@ -1200,10 +1399,11 @@ for _source_name, _source_bytes in st.session_state.get("_xrd_bytes", {}).items(
             _name = (_source_name if len(_patterns) == 1 else
                      f"{_source_name} [scan {_scan_index + 1}].xy")
             active_xrd.append(RestoredFile(
-                _name, _source_bytes, np.column_stack((_pattern.x, _pattern.y)),
+                _name, _source_bytes, np.column_stack((_pattern.x, _pattern.y)), _pattern.metadata,
             ))
     except XRDParseError as _error:
         st.error(T["read_error"] + f"{_source_name}: {_error}")
+        xrd_read_errors.append((_source_name, str(_error)))
 
 _new_pattern_names = [file.name for file in active_xrd]
 _old_pattern_names = st.session_state.get("_xrd_pattern_names")
@@ -1367,6 +1567,8 @@ st.sidebar.header(T["fig_size"])
 for _key, _value in STYLE_DEFAULTS.items():
     st.session_state.setdefault(_key, _value)
 st.session_state.setdefault("auto_margin_left", True)
+st.session_state.setdefault("qc_step_tolerance", qc.DEFAULT_STEP_TOLERANCE_PERCENT)
+st.session_state.setdefault("qc_min_points", qc.DEFAULT_MIN_POINTS)
 st.session_state.setdefault("fig_width", 10.0)
 st.session_state.setdefault("fig_height", 8.0)
 st.sidebar.selectbox(ui("論文図のひな形", "Publication figure preset"), list(FIGURE_PRESETS_MM),
@@ -1764,6 +1966,146 @@ if active_xrd:
             x_ref, y_ref = parse_pdf_card(raw, two_theta_range=(x_min, x_max))
             hkls = None
         return x_ref, y_ref, hkls
+
+    def data_reliability():
+        """The checks of every file, as shown in Data Reliability and written into the figure record."""
+        refs = build_ref_list()
+        entries = [{"kind": "measurement", "name": name, "shown": False,
+                    "checks": [qc.Check("read", qc.FAIL, {"error": message}, required=True)]}
+                   for name, message in xrd_read_errors]
+        tolerance = float(st.session_state.get("qc_step_tolerance", qc.DEFAULT_STEP_TOLERANCE_PERCENT))
+        minimum = int(st.session_state.get("qc_min_points", qc.DEFAULT_MIN_POINTS))
+        for i, file in enumerate(active_xrd):
+            x, y = file.pattern[:, 0], file.pattern[:, 1]
+            checks = qc.check_pattern(x, y, file.metadata, references_shown=bool(refs),
+                                      step_tolerance_percent=tolerance, min_points=minimum)
+            in_range = (x >= x_min) & (x <= x_max)
+            checks.append(qc.check_display(y[in_range], normalize))
+            entries.append({"kind": "measurement", "name": file.name, "index": i, "checks": checks,
+                            "shown": bool(visibles[i]) if i < len(visibles) else True})
+        for ref in refs:
+            raw = ref["file"].read()
+            if ref["type"] == "pdf":
+                report = pdf_card_report(raw)
+                in_range = sum(x_min <= angle <= x_max for angle in report["angles"])
+                checks = ([qc.Check("pdf_read", qc.FAIL, {"total": 0, "skipped": 0})] if report["error"]
+                          else qc.check_pdf_card(len(report["angles"]), report["skipped"], in_range))
+            else:
+                report = cif_report(raw)
+                peaks = None if report["error"] else calc_cif_pattern(raw, two_theta_range=(x_min, x_max))[0]
+                checks = qc.check_cif(report["error"], report["structures"], report["warnings"],
+                                      0 if peaks is None else len(peaks))
+            entries.append({"kind": ref["type"], "name": ref["file"].name, "label": ref["label"], "checks": checks,
+                            "shown": True})
+        for entry in entries:
+            entry["overall"] = qc.overall(entry["checks"])
+        return entries
+
+    def show_data_reliability(entries):
+        """The Data Reliability panel: folded, one line until opened."""
+        counts = qc.summary([entry["overall"] for entry in entries])
+        serious = any(entry["overall"] in (qc.WARNING, qc.FAIL) for entry in entries)
+        label = ("⚠️ " if serious else "") + "Data Reliability — " + " · ".join(f"{s} {n}" for s, n in counts.items())
+        with st.expander(label, expanded=False):
+            st.caption(ui("読み込んだデータとリファレンスの点検結果です。データは変更していません。"
+                          "ファイルごとの判定は、最も重い項目で決まります。",
+                          "Checks of the measurements and references as read. The data are not changed. "
+                          "A file's result is that of its most serious check."))
+            kinds = {"measurement": ui("測定", "Measurement"), "cif": "CIF", "pdf": ui("PDF カード", "PDF card")}
+            columns = (ui("項目", "Check"), ui("判定", "Result"), ui("見つかったこと", "Finding"),
+                       ui("基準", "Criterion"), ui("確認すること", "What to check"))
+            for entry in entries:
+                hidden = "" if entry["shown"] else ui("（非表示）", " (hidden)")
+                st.markdown(f"**{kinds[entry['kind']]}：{md_escape(entry['name'])}**{md_escape(hidden)} — `{entry['overall']}`")
+                rows = []
+                for check in entry["checks"]:
+                    item, criterion, found, advice = qc_text(check)
+                    rows.append(dict(zip(columns, (item, check.status, found, criterion,
+                                                   advice if check.status != qc.PASS else ""))))
+                # A Markdown table: st.table needs pyarrow, which this app does not otherwise use.
+                st.markdown(markdown_table(columns, [[row[c] for c in columns] for row in rows]))
+            st.markdown("**" + ui("読み込みと表示で行う処理", "What reading and drawing do") + "**")
+            st.markdown("\n".join([
+                "- " + ui("読み込み：点を角度順に並べます。数値でない行（NaN・無限大）は描きません。強度は保存された値のままです。",
+                          "Reading: points are put in angle order; rows that are not numbers (NaN, infinity) are not drawn. "
+                          "Intensities stay as stored."),
+                "- " + ui("表示：2θ 範囲で切り出し、縦にずらします。正規化がオンのときは、各パターンを範囲内の最大値で割ります。",
+                          "Drawing: the 2θ range is cut out and patterns are stacked; with normalisation on, each pattern "
+                          "is divided by its maximum within the range."),
+                "- " + ui("行わないこと：平滑化、バックグラウンド除去、アッテネータ補正、外れ値の除去、補間。",
+                          "Not done: smoothing, background removal, attenuator correction, outlier removal, interpolation."),
+            ]))
+            st.markdown("**" + ui("判定に使う暫定値", "Provisional thresholds") + "**")
+            st.caption(ui("確立した基準がないため暫定値です。用途に合わせて変えられます。",
+                          "These are provisional, not established criteria; change them to suit the data."))
+            left, right = st.columns(2)
+            left.number_input(ui("ステップ幅のずれの許容 (%)", "Allowed step deviation (%)"), .01, 50., step=.5,
+                              key="qc_step_tolerance")
+            right.number_input(ui("最少データ点数", "Fewest points"), 2, 100000, step=1, key="qc_min_points")
+
+    def figure_record(entries, export_info):
+        """The figure record (.json): inputs, what was done to them, the checks, settings and versions."""
+        from importlib import metadata as package_metadata
+        versions = {"python": platform.python_version()}
+        for package in ("streamlit", "numpy", "pandas", "matplotlib", "scipy", "plotly", "pymatgen", "pdfplumber"):
+            try:
+                versions[package] = package_metadata.version(package)
+            except package_metadata.PackageNotFoundError:
+                versions[package] = None
+        checks = {(entry["kind"], entry["name"]): {
+            "overall": entry["overall"],
+            "checks": [{"code": c.code, "status": c.status, "required": c.required, "values": c.values}
+                       for c in entry["checks"]]} for entry in entries}
+        measurements = []
+        for i, file in enumerate(active_xrd):
+            x, y = file.pattern[:, 0], file.pattern[:, 1]
+            in_range = (x >= x_min) & (x <= x_max)
+            meta = {k: v for k, v in file.metadata.items() if k != "vendor_header"}
+            measurements.append({
+                "name": file.name, "label": labels[i] if i < len(labels) else file.name,
+                "shown": bool(visibles[i]) if i < len(visibles) else True,
+                "sha256": hashlib.sha256(file.read()).hexdigest(),
+                "points_read": int(len(x)), "points_in_range": int(in_range.sum()),
+                "angle_range_read": [float(x.min()), float(x.max())],
+                "normalized_by": (float(max(np.max(y[in_range]), 1e-9)) if normalize and in_range.any() else None),
+                "reading": meta, "quality": checks[("measurement", file.name)],
+            })
+        failed = [{"name": name, "error": message, "quality": checks[("measurement", name)]}
+                  for name, message in xrd_read_errors]
+        references = []
+        for ref in build_ref_list():
+            references.append({
+                "type": ref["type"], "name": ref["file"].name, "label": ref["label"],
+                "sha256": hashlib.sha256(ref["file"].read()).hexdigest(),
+                "calculation": ({"program": "pymatgen XRDCalculator", "wavelength": "CuKa",
+                                 "wavelength_A": qc.CIF_WAVELENGTH_A, "structure_used": 1, "symprec": 0.01}
+                                if ref["type"] == "cif" else {"source": "peak table of the PDF card"}),
+                "quality": checks[(ref["type"], ref["file"].name)],
+            })
+        record = {
+            "format": "xrd-maker-figure-record", "version": 1,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "app": {"name": "XRD Maker", "version": APP_VERSION}, "environment": versions,
+            "figure": {"width_mm": inches_to_mm(fig_width), "height_mm": inches_to_mm(fig_height), **export_info,
+                       "two_theta_range": [float(x_min), float(x_max)], "normalized": bool(normalize),
+                       "x_title": x_title, "y_title": y_title},
+            "processing": [
+                "read: points sorted by angle; rows with NaN or infinite values not drawn; intensities as stored",
+                "cut to the 2theta range",
+                *(["normalized: each pattern divided by its maximum within the range"] if normalize else []),
+                "stacked with vertical offsets (settings: global_offset, extra_offset_*, yoff_*)",
+                *(["peak positions marked: local maxima (scipy find_peaks, prominence = peak_prom x maximum)"] if show_peaks else []),
+                *(["reference matching marks: measured maxima within phase_tolerance of reference peaks"] if show_phase_markers else []),
+                "not done: smoothing, background removal, attenuator correction, outlier removal, interpolation",
+            ],
+            "overall": max((entry["overall"] for entry in entries if entry["overall"] != qc.NOT_EVALUATED),
+                           key=[qc.PASS, qc.CAUTION, qc.WARNING, qc.FAIL].index, default=qc.NOT_EVALUATED),
+            "measurements": measurements, "unreadable_measurements": failed, "references": references,
+            "settings": project_settings(),
+        }
+        return json.dumps(record, ensure_ascii=False, indent=2, default=lambda value: (
+            list(value) if isinstance(value, (tuple, set)) else value.item() if hasattr(value, "item") else str(value))
+        ).encode("utf-8")
 
     def draw_panel(ax_main, ax_ref, indices, ref_data, first, title, ticks, show_legend, show_cif_legend):
         """One column: its patterns stacked in display order, its labels and legend, and the references under it.
@@ -2218,6 +2560,14 @@ if active_xrd:
 
     # ===== 描画 & ダウンロード =====
     with col_graph:
+        qc_entries = data_reliability()
+        _serious = tuple((entry["name"], entry["overall"]) for entry in qc_entries
+                         if entry["overall"] in (qc.WARNING, qc.FAIL))
+        if _serious and st.session_state.get("_qc_notice") != _serious:
+            # Once, when the files or their results change; the panel below keeps the details.
+            st.warning(ui("{count} 件のデータに WARNING／FAIL があります。図の下の Data Reliability で内容を確認してください。",
+                          "{count} files have WARNING or FAIL. See Data Reliability below the figure.").format(count=len(_serious)))
+        st.session_state["_qc_notice"] = _serious
         interactive_tab, export_tab = st.tabs([T["interactive_preview"], T["export_preview"]])
         _sl  = bool(show_legend)
         _scl = bool(show_cif_legend)
@@ -2256,7 +2606,11 @@ if active_xrd:
                 width=inches_to_mm(fig_width), height=inches_to_mm(fig_height), dpi=dpi_export,
             ))
             st.caption(ui("軸や文字が端で切れる場合は、余白または文字サイズを調整してください。", "If text or axes are clipped, adjust the margins or font sizes."))
+        show_data_reliability(qc_entries)
 
+        if _serious:
+            st.sidebar.warning(ui("この図のデータには WARNING／FAIL があります（Data Reliability を参照）。図の記録に内容が残ります。",
+                                  "The data of this figure have WARNING or FAIL (see Data Reliability); the figure record lists them."))
         st.sidebar.download_button(
             ui("📥 PDF として保存", "📥 Save as PDF"),
             data=pdf_bytes, file_name="xrd_result.pdf", mime="application/pdf", **FULL_WIDTH["download_button"],
@@ -2280,6 +2634,15 @@ if active_xrd:
                 key=f"dl_png_{_sl}_{_scl}",
                 **FULL_WIDTH["download_button"],
             )
+        figure_record_bytes = figure_record(qc_entries, {"dpi": dpi_export, "margin_left": plot_style["margin_left"]})
+        st.sidebar.download_button(
+            ui("📥 図の記録を保存 (.json)", "📥 Save figure record (.json)"),
+            data=figure_record_bytes,
+            file_name="xrd_result_record.json", mime="application/json", key="dl_record",
+            help=ui("入力ファイル（SHA-256）、行った処理、点検結果、設定、アプリとライブラリの版を記録します。",
+                    "Records the input files (SHA-256), what was done to them, the checks, the settings and the app and library versions."),
+            **FULL_WIDTH["download_button"],
+        )
         st.sidebar.divider()
 
 else:
